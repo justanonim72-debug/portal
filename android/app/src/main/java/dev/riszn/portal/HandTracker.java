@@ -42,10 +42,8 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
     private volatile boolean frontCamera = true;
     private volatile String backend = "…";
 
-    // Reused native-order RGBA staging buffer. We intentionally do NOT use BitmapImageBuilder
-    // here: closing an MPImage backed by Bitmap recycles the source Bitmap inside MediaPipe.
-    // ByteBuffer-backed MPImage.close() does not free/recycle our buffer, so it is safe to reuse
-    // after synchronous detectForVideo() returns and the MPImage has been closed.
+    // Reused direct RGBA staging buffer. ByteBuffer-backed MPImage.close() is a no-op for the
+    // caller-owned buffer, unlike BitmapImageBuilder whose MPImage container recycles the Bitmap.
     private ByteBuffer rgbaBuffer;
     private int rgbaWidth = -1;
     private int rgbaHeight = -1;
@@ -71,6 +69,7 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
     void initialize() {
         handler.post(() -> {
             try {
+                // GPU must be created and used on this same dedicated thread.
                 landmarker = create(Delegate.GPU);
                 backend = "GPU";
                 ready = true;
@@ -99,9 +98,12 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
                 .setBaseOptions(base)
                 .setRunningMode(RunningMode.VIDEO)
                 .setNumHands(2)
-                .setMinHandDetectionConfidence(0.45f)
-                .setMinHandPresenceConfidence(0.48f)
-                .setMinTrackingConfidence(0.58f)
+                // Video test is dim and the second hand was frequently missed. Lower detection /
+                // presence only moderately; keep tracking at 0.50 to avoid turning noise into a
+                // persistent phantom hand.
+                .setMinHandDetectionConfidence(0.40f)
+                .setMinHandPresenceConfidence(0.42f)
+                .setMinTrackingConfidence(0.50f)
                 .build();
 
         return HandLandmarker.createFromOptions(context, options);
