@@ -1,4 +1,4 @@
-const CACHE = "portal-v5-worker-curve";
+const CACHE = "portal-v5-1-classic-worker";
 const APP_SHELL = [
   "./",
   "./index.html",
