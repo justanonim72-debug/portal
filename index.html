@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <main id="app" class="app" data-state="boot">
+  <main id="app" class="app" data-state="boot" data-facing="user">
     <video id="camera" playsinline muted></video>
     <canvas id="stage" aria-label="Kamera dengan portal real-time"></canvas>
 
@@ -20,7 +20,7 @@
         <span></span><span></span><span></span><span></span>
       </div>
       <h1>PORTAL</h1>
-      <p>Rentangkan dua tangan. Portal bakal muncul di antara jempol dan telunjuk.</p>
+      <p>Pakai satu atau dua tangan. Jempol + telunjuk jadi pegangan portal, lalu bidangnya mengikuti gerakan tangan secara real-time.</p>
       <button id="startBtn" class="primary" type="button">Mulai kamera</button>
       <small id="bootStatus">Menyiapkan hand tracking…</small>
     </section>
@@ -30,7 +30,7 @@
       <div class="fps-pill"><span id="fps">--</span> FPS</div>
     </header>
 
-    <aside id="hint" class="hint">Tunjukkan <b>dua tangan</b> ke kamera</aside>
+    <aside id="hint" class="hint">Tunjukkan <b>satu atau dua tangan</b></aside>
 
     <nav class="controls" aria-label="Kontrol portal">
       <button id="filterBtn" class="control wide" type="button">
@@ -44,6 +44,6 @@
     <div id="toast" class="toast" role="status"></div>
   </main>
 
-  <script type="module" src="./app.js"></script>
+  <script type="module" src="./portal-v2.js"></script>
 </body>
 </html>
