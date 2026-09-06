@@ -1,0 +1,47 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "dev.riszn.portal"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "dev.riszn.portal"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "0.1.0-native-gpu"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    packaging {
+        resources {
+            excludes += ["META-INF/DEPENDENCIES", "META-INF/LICENSE", "META-INF/LICENSE.txt", "META-INF/NOTICE", "META-INF/NOTICE.txt"]
+        }
+    }
+}
+
+dependencies {
+    def camerax = "1.6.2"
+    implementation "androidx.appcompat:appcompat:1.7.1"
+    implementation "com.google.android.material:material:1.13.0"
+    implementation "androidx.camera:camera-core:${camerax}"
+    implementation "androidx.camera:camera-camera2:${camerax}"
+    implementation "androidx.camera:camera-lifecycle:${camerax}"
+    implementation "androidx.camera:camera-view:${camerax}"
+    implementation "androidx.camera:camera-video:${camerax}"
+    implementation "androidx.camera:camera-effects:${camerax}"
+    implementation "com.google.mediapipe:tasks-vision:0.10.35"
+}
