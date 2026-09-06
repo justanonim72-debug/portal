@@ -52,6 +52,7 @@ let fpsStarted = performance.now();
 let measuredFps = 0;
 let thermalTick = 0;
 let inferenceBusy = false;
+let animationFrameId = null;
 
 const THERMAL_LUT = new Uint8Array(256 * 3);
 for (let v = 0; v < 256; v++) {
@@ -137,6 +138,11 @@ async function openCamera() {
     return;
   }
 
+  running = false;
+  if (animationFrameId !== null) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
   if (stream) {
     stream.getTracks().forEach(track => track.stop());
     stream = null;
@@ -155,15 +161,19 @@ async function openCamera() {
   try {
     stream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = stream;
+    if (!video.videoWidth || !video.videoHeight) {
+      await new Promise(resolve => video.addEventListener("loadedmetadata", resolve, { once: true }));
+    }
     await video.play();
     resizeCanvases();
     running = true;
     lastVideoTime = -1;
+    window.__lastHandResult = null;
     smoothed = null;
     portalAlpha = 0;
     app.dataset.state = "live";
     setStatus("Tracking", "ready");
-    requestAnimationFrame(renderLoop);
+    animationFrameId = requestAnimationFrame(renderLoop);
   } catch (error) {
     console.error(error);
     const insecure = !window.isSecureContext;
@@ -475,6 +485,7 @@ function renderLoop(now) {
     setStatus("Portal aktif", "ready");
   } else {
     portalAlpha += (0 - portalAlpha) * 0.18;
+    if (portalAlpha < 0.04) smoothed = null;
     if (!hasTwoHands) {
       hint.innerHTML = "Tunjukkan <b>dua tangan</b> ke kamera";
       setStatus(hasTwoHands ? "Tracking" : "Cari 2 tangan", "warn");
@@ -487,7 +498,7 @@ function renderLoop(now) {
 
   drawDebugHands(result, transform);
   updateFps(now);
-  requestAnimationFrame(renderLoop);
+  animationFrameId = requestAnimationFrame(renderLoop);
 }
 
 startBtn.addEventListener("click", openCamera);
@@ -520,6 +531,8 @@ window.addEventListener("orientationchange", () => {
 });
 
 window.addEventListener("beforeunload", () => {
+  running = false;
+  if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
   if (stream) stream.getTracks().forEach(track => track.stop());
   handLandmarker?.close?.();
 });
