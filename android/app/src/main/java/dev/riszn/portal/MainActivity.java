@@ -24,6 +24,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.CameraEffect;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
+import androidx.camera.core.MirrorMode;
 import androidx.camera.effects.OverlayEffect;
 import androidx.camera.video.MediaStoreOutputOptions;
 import androidx.camera.video.Recording;
@@ -163,6 +164,7 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
         cameraController = new LifecycleCameraController(this);
         cameraController.setCameraSelector(frontCamera ? CameraSelector.DEFAULT_FRONT_CAMERA : CameraSelector.DEFAULT_BACK_CAMERA);
         cameraController.setEnabledUseCases(CameraController.IMAGE_ANALYSIS | CameraController.VIDEO_CAPTURE);
+        cameraController.setVideoCaptureMirrorMode(MirrorMode.MIRROR_MODE_ON_FRONT_ONLY);
         cameraController.setImageAnalysisBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST);
         cameraController.setImageAnalysisOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888);
         cameraController.setImageAnalysisAnalyzer(handTracker.executor(), handTracker);
