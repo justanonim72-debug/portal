@@ -13,9 +13,7 @@ button { font: inherit; }
   position: fixed;
   inset: 0;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 35%, rgba(45, 56, 71, .26), transparent 48%),
-    #05070a;
+  background: radial-gradient(circle at 50% 35%, rgba(45,56,71,.26), transparent 48%), #05070a;
   touch-action: manipulation;
 }
 
@@ -69,9 +67,8 @@ button { font: inherit; }
 .mark span:nth-child(4) { right: 0; bottom: 0; border-left: 0; border-top: 0; }
 
 .intro h1 { margin: 0; font-size: clamp(36px, 11vw, 64px); letter-spacing: .2em; text-indent: .2em; font-weight: 800; }
-.intro p { max-width: 390px; margin: 0 0 8px; color: rgba(238, 244, 252, .72); line-height: 1.5; font-size: 14px; }
-.intro small { color: rgba(238, 244, 252, .45); min-height: 1.4em; }
-
+.intro p { max-width: 405px; margin: 0 0 8px; color: rgba(238,244,252,.72); line-height: 1.5; font-size: 14px; }
+.intro small { color: rgba(238,244,252,.45); min-height: 1.4em; }
 .primary { border: 0; border-radius: 999px; padding: 13px 22px; background: #f4f7fb; color: #07090d; font-weight: 800; min-width: 160px; cursor: pointer; }
 .primary:disabled { opacity: .42; }
 
@@ -86,25 +83,62 @@ button { font: inherit; }
 .fps-pill { color: rgba(255,255,255,.7); }
 .fps-pill span { color: #fff; font-variant-numeric: tabular-nums; }
 
-.hint { position: absolute; z-index: 5; top: 72px; left: 50%; transform: translate(-50%, -8px); padding: 9px 13px; border-radius: 999px; background: rgba(3,6,9,.48); border: 1px solid rgba(255,255,255,.11); color: rgba(255,255,255,.75); backdrop-filter: blur(12px); font-size: 12px; white-space: nowrap; opacity: 0; transition: opacity .25s ease, transform .25s ease; pointer-events: none; }
+.rec-badge {
+  position: absolute;
+  z-index: 7;
+  top: max(56px, calc(env(safe-area-inset-top) + 40px));
+  left: 50%;
+  transform: translate(-50%, -8px);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(46,5,12,.72);
+  border: 1px solid rgba(255,83,105,.38);
+  color: #fff;
+  font-size: 10px;
+  letter-spacing: .1em;
+  opacity: 0;
+  visibility: hidden;
+  transition: .2s ease;
+  pointer-events: none;
+  backdrop-filter: blur(12px);
+}
+.rec-badge.visible { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+.rec-badge span { width: 7px; height: 7px; border-radius: 50%; background: #ff5369; box-shadow: 0 0 12px rgba(255,83,105,.9); animation: recPulse .9s ease-in-out infinite alternate; }
+.rec-badge b { font-variant-numeric: tabular-nums; }
+@keyframes recPulse { from { opacity: .45; } to { opacity: 1; } }
+
+.hint { position: absolute; z-index: 5; top: 92px; left: 50%; transform: translate(-50%, -8px); padding: 9px 13px; border-radius: 999px; background: rgba(3,6,9,.48); border: 1px solid rgba(255,255,255,.11); color: rgba(255,255,255,.75); backdrop-filter: blur(12px); font-size: 12px; white-space: nowrap; max-width: 94vw; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity .25s ease, transform .25s ease; pointer-events: none; }
 .app[data-state="live"] .hint.visible { opacity: 1; transform: translate(-50%, 0); }
 
-.controls { position: absolute; z-index: 6; left: 50%; bottom: max(18px, env(safe-area-inset-bottom)); transform: translate(-50%, 12px); display: grid; grid-template-columns: minmax(138px, 1fr) 52px 52px; gap: 9px; width: min(94vw, 410px); opacity: 0; pointer-events: none; transition: opacity .35s ease, transform .35s ease; }
+.controls { position: absolute; z-index: 6; left: 50%; bottom: max(18px, env(safe-area-inset-bottom)); transform: translate(-50%, 12px); display: grid; grid-template-columns: minmax(130px, 1fr) 52px 52px 52px; gap: 8px; width: min(96vw, 472px); opacity: 0; pointer-events: none; transition: opacity .35s ease, transform .35s ease; }
 .app[data-state="live"] .controls { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
 .control { min-height: 52px; border: 1px solid rgba(255,255,255,.16); border-radius: 17px; background: rgba(4,7,10,.54); color: #fff; backdrop-filter: blur(18px); box-shadow: 0 10px 30px rgba(0,0,0,.18); cursor: pointer; }
 .control:active { transform: scale(.97); }
-.wide { text-align: left; padding: 8px 15px; }
-.control-label { display: block; color: rgba(255,255,255,.46); font-size: 9px; letter-spacing: .12em; }
-.wide strong { display: block; margin-top: 2px; font-size: 14px; letter-spacing: .06em; }
+.wide { text-align: left; padding: 8px 13px; min-width: 0; }
+.control-label { display: block; color: rgba(255,255,255,.46); font-size: 8px; letter-spacing: .12em; }
+.wide strong { display: block; margin-top: 2px; font-size: 13px; letter-spacing: .045em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .icon-btn { font-size: 22px; }
 .icon-btn.active { border-color: rgba(143,232,255,.75); background: rgba(82,195,228,.2); }
+.rec-btn { font-size: 18px; font-weight: 900; }
+.rec-btn.active { border-color: rgba(255,93,116,.9); background: rgba(255,72,97,.22); color: #fff; box-shadow: 0 0 0 1px rgba(255,93,116,.2), 0 10px 30px rgba(255,50,80,.18); }
 
 .toast { position: absolute; z-index: 20; left: 50%; bottom: calc(max(18px, env(safe-area-inset-bottom)) + 72px); transform: translate(-50%, 12px); max-width: min(90vw, 390px); padding: 10px 14px; border-radius: 13px; background: rgba(5,7,10,.88); border: 1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.88); font-size: 12px; opacity: 0; visibility: hidden; transition: .22s ease; text-align: center; }
 .toast.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
 
+@media (max-width: 390px) {
+  .controls { grid-template-columns: minmax(112px, 1fr) 48px 48px 48px; gap: 6px; }
+  .control { min-height: 48px; border-radius: 15px; }
+  .wide strong { font-size: 11px; }
+  .icon-btn { font-size: 20px; }
+}
+
 @media (orientation: landscape) and (max-height: 520px) {
   .top-hud { top: max(10px, env(safe-area-inset-top)); }
-  .hint { top: 50px; }
-  .controls { left: auto; right: max(12px, env(safe-area-inset-right)); bottom: 12px; transform: translateX(10px); width: auto; grid-template-columns: 126px 48px 48px; }
+  .rec-badge { top: max(43px, calc(env(safe-area-inset-top) + 33px)); }
+  .hint { top: 48px; }
+  .controls { left: auto; right: max(12px, env(safe-area-inset-right)); bottom: 12px; transform: translateX(10px); width: auto; grid-template-columns: 126px 48px 48px 48px; }
   .app[data-state="live"] .controls { transform: translateX(0); }
 }
