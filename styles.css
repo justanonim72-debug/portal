@@ -21,23 +21,30 @@ button { font: inherit; }
 
 #camera {
   position: absolute;
-  width: 1px;
-  height: 1px;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   opacity: 0;
   pointer-events: none;
+  background: #020305;
+  transition: opacity .28s ease;
+  will-change: transform;
 }
+.app[data-state="live"] #camera { opacity: 1; }
+.app[data-facing="user"] #camera { transform: scaleX(-1); }
+.app[data-facing="environment"] #camera { transform: none; }
 
 #stage {
   position: absolute;
+  z-index: 2;
   inset: 0;
   width: 100%;
   height: 100%;
   display: block;
-  opacity: 0;
-  transition: opacity .35s ease;
+  pointer-events: none;
 }
-
-.app[data-state="live"] #stage { opacity: 1; }
 
 .intro {
   position: absolute;
@@ -52,148 +59,39 @@ button { font: inherit; }
   background: linear-gradient(180deg, rgba(5,7,10,.94), rgba(5,7,10,.82));
   transition: opacity .35s ease, visibility .35s ease;
 }
+.app[data-state="live"] .intro { opacity: 0; visibility: hidden; pointer-events: none; }
 
-.app[data-state="live"] .intro {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.mark {
-  position: relative;
-  width: 72px;
-  height: 72px;
-  margin-bottom: 2px;
-}
-.mark span {
-  position: absolute;
-  width: 27px;
-  height: 27px;
-  border: 3px solid rgba(255,255,255,.92);
-}
+.mark { position: relative; width: 72px; height: 72px; margin-bottom: 2px; }
+.mark span { position: absolute; width: 27px; height: 27px; border: 3px solid rgba(255,255,255,.92); }
 .mark span:nth-child(1) { left: 0; top: 0; border-right: 0; border-bottom: 0; }
 .mark span:nth-child(2) { right: 0; top: 0; border-left: 0; border-bottom: 0; }
 .mark span:nth-child(3) { left: 0; bottom: 0; border-right: 0; border-top: 0; }
 .mark span:nth-child(4) { right: 0; bottom: 0; border-left: 0; border-top: 0; }
 
-.intro h1 {
-  margin: 0;
-  font-size: clamp(36px, 11vw, 64px);
-  letter-spacing: .2em;
-  text-indent: .2em;
-  font-weight: 800;
-}
-.intro p {
-  max-width: 380px;
-  margin: 0 0 8px;
-  color: rgba(238, 244, 252, .72);
-  line-height: 1.5;
-  font-size: 14px;
-}
+.intro h1 { margin: 0; font-size: clamp(36px, 11vw, 64px); letter-spacing: .2em; text-indent: .2em; font-weight: 800; }
+.intro p { max-width: 390px; margin: 0 0 8px; color: rgba(238, 244, 252, .72); line-height: 1.5; font-size: 14px; }
 .intro small { color: rgba(238, 244, 252, .45); min-height: 1.4em; }
 
-.primary {
-  border: 0;
-  border-radius: 999px;
-  padding: 13px 22px;
-  background: #f4f7fb;
-  color: #07090d;
-  font-weight: 800;
-  min-width: 160px;
-  cursor: pointer;
-}
+.primary { border: 0; border-radius: 999px; padding: 13px 22px; background: #f4f7fb; color: #07090d; font-weight: 800; min-width: 160px; cursor: pointer; }
 .primary:disabled { opacity: .42; }
 
-.hud {
-  position: absolute;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  pointer-events: none;
-  opacity: 0;
-  transform: translateY(-8px);
-  transition: opacity .35s ease, transform .35s ease;
-}
+.hud { position: absolute; z-index: 5; display: flex; align-items: center; pointer-events: none; opacity: 0; transform: translateY(-8px); transition: opacity .35s ease, transform .35s ease; }
 .app[data-state="live"] .hud { opacity: 1; transform: translateY(0); }
-.top-hud {
-  top: max(16px, env(safe-area-inset-top));
-  left: 16px;
-  right: 16px;
-  justify-content: space-between;
-}
-.status-pill, .fps-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 7px 10px;
-  border: 1px solid rgba(255,255,255,.14);
-  border-radius: 999px;
-  background: rgba(2,5,8,.45);
-  backdrop-filter: blur(14px);
-  font-size: 11px;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  box-shadow: 0 8px 24px rgba(0,0,0,.14);
-}
-.status-pill i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #ffd75a;
-  box-shadow: 0 0 12px currentColor;
-}
+.top-hud { top: max(16px, env(safe-area-inset-top)); left: 16px; right: 16px; justify-content: space-between; }
+.status-pill, .fps-pill { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 7px 10px; border: 1px solid rgba(255,255,255,.14); border-radius: 999px; background: rgba(2,5,8,.45); backdrop-filter: blur(14px); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; box-shadow: 0 8px 24px rgba(0,0,0,.14); }
+.status-pill i { width: 7px; height: 7px; border-radius: 50%; background: #ffd75a; box-shadow: 0 0 12px currentColor; }
 .status-pill i.ready { background: #75f2a7; }
 .status-pill i.warn { background: #ffd75a; }
 .status-pill i.error { background: #ff6c77; }
 .fps-pill { color: rgba(255,255,255,.7); }
 .fps-pill span { color: #fff; font-variant-numeric: tabular-nums; }
 
-.hint {
-  position: absolute;
-  z-index: 5;
-  top: 72px;
-  left: 50%;
-  transform: translate(-50%, -8px);
-  padding: 9px 13px;
-  border-radius: 999px;
-  background: rgba(3,6,9,.48);
-  border: 1px solid rgba(255,255,255,.11);
-  color: rgba(255,255,255,.75);
-  backdrop-filter: blur(12px);
-  font-size: 12px;
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity .25s ease, transform .25s ease;
-  pointer-events: none;
-}
+.hint { position: absolute; z-index: 5; top: 72px; left: 50%; transform: translate(-50%, -8px); padding: 9px 13px; border-radius: 999px; background: rgba(3,6,9,.48); border: 1px solid rgba(255,255,255,.11); color: rgba(255,255,255,.75); backdrop-filter: blur(12px); font-size: 12px; white-space: nowrap; opacity: 0; transition: opacity .25s ease, transform .25s ease; pointer-events: none; }
 .app[data-state="live"] .hint.visible { opacity: 1; transform: translate(-50%, 0); }
 
-.controls {
-  position: absolute;
-  z-index: 6;
-  left: 50%;
-  bottom: max(18px, env(safe-area-inset-bottom));
-  transform: translate(-50%, 12px);
-  display: grid;
-  grid-template-columns: minmax(138px, 1fr) 52px 52px;
-  gap: 9px;
-  width: min(94vw, 410px);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .35s ease, transform .35s ease;
-}
+.controls { position: absolute; z-index: 6; left: 50%; bottom: max(18px, env(safe-area-inset-bottom)); transform: translate(-50%, 12px); display: grid; grid-template-columns: minmax(138px, 1fr) 52px 52px; gap: 9px; width: min(94vw, 410px); opacity: 0; pointer-events: none; transition: opacity .35s ease, transform .35s ease; }
 .app[data-state="live"] .controls { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
-.control {
-  min-height: 52px;
-  border: 1px solid rgba(255,255,255,.16);
-  border-radius: 17px;
-  background: rgba(4,7,10,.54);
-  color: #fff;
-  backdrop-filter: blur(18px);
-  box-shadow: 0 10px 30px rgba(0,0,0,.18);
-  cursor: pointer;
-}
+.control { min-height: 52px; border: 1px solid rgba(255,255,255,.16); border-radius: 17px; background: rgba(4,7,10,.54); color: #fff; backdrop-filter: blur(18px); box-shadow: 0 10px 30px rgba(0,0,0,.18); cursor: pointer; }
 .control:active { transform: scale(.97); }
 .wide { text-align: left; padding: 8px 15px; }
 .control-label { display: block; color: rgba(255,255,255,.46); font-size: 9px; letter-spacing: .12em; }
@@ -201,24 +99,7 @@ button { font: inherit; }
 .icon-btn { font-size: 22px; }
 .icon-btn.active { border-color: rgba(143,232,255,.75); background: rgba(82,195,228,.2); }
 
-.toast {
-  position: absolute;
-  z-index: 20;
-  left: 50%;
-  bottom: calc(max(18px, env(safe-area-inset-bottom)) + 72px);
-  transform: translate(-50%, 12px);
-  max-width: min(90vw, 390px);
-  padding: 10px 14px;
-  border-radius: 13px;
-  background: rgba(5,7,10,.88);
-  border: 1px solid rgba(255,255,255,.14);
-  color: rgba(255,255,255,.88);
-  font-size: 12px;
-  opacity: 0;
-  visibility: hidden;
-  transition: .22s ease;
-  text-align: center;
-}
+.toast { position: absolute; z-index: 20; left: 50%; bottom: calc(max(18px, env(safe-area-inset-bottom)) + 72px); transform: translate(-50%, 12px); max-width: min(90vw, 390px); padding: 10px 14px; border-radius: 13px; background: rgba(5,7,10,.88); border: 1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.88); font-size: 12px; opacity: 0; visibility: hidden; transition: .22s ease; text-align: center; }
 .toast.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
 
 @media (orientation: landscape) and (max-height: 520px) {
