@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#05070a" />
+  <meta name="color-scheme" content="dark" />
+  <title>Portal</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main id="app" class="app" data-state="boot">
+    <video id="camera" playsinline muted></video>
+    <canvas id="stage" aria-label="Kamera dengan portal real-time"></canvas>
+
+    <section id="intro" class="intro">
+      <div class="mark" aria-hidden="true">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <h1>PORTAL</h1>
+      <p>Rentangkan dua tangan. Portal bakal muncul di antara jempol dan telunjuk.</p>
+      <button id="startBtn" class="primary" type="button">Mulai kamera</button>
+      <small id="bootStatus">Menyiapkan hand tracking…</small>
+    </section>
+
+    <header class="hud top-hud" aria-live="polite">
+      <div class="status-pill"><i id="statusDot"></i><span id="statusText">Memuat model</span></div>
+      <div class="fps-pill"><span id="fps">--</span> FPS</div>
+    </header>
+
+    <aside id="hint" class="hint">Tunjukkan <b>dua tangan</b> ke kamera</aside>
+
+    <nav class="controls" aria-label="Kontrol portal">
+      <button id="filterBtn" class="control wide" type="button">
+        <span class="control-label">FILTER</span>
+        <strong id="filterName">THERMAL</strong>
+      </button>
+      <button id="debugBtn" class="control icon-btn" type="button" aria-label="Tampilkan titik tangan">⌁</button>
+      <button id="cameraBtn" class="control icon-btn" type="button" aria-label="Ganti kamera">↺</button>
+    </nav>
+
+    <div id="toast" class="toast" role="status"></div>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
