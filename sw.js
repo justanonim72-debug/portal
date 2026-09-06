@@ -1,9 +1,10 @@
-const CACHE = "portal-v4-pinch-rec";
+const CACHE = "portal-v5-worker-curve";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
-  "./portal-v4.js",
+  "./portal-v5.js",
+  "./tracking-worker-v5.js",
   "./manifest.webmanifest",
   "./icon.svg"
 ];
@@ -24,7 +25,6 @@ self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
-
   event.respondWith(
     fetch(event.request)
       .then(response => {
