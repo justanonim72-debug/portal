@@ -1,9 +1,9 @@
-const CACHE = "portal-v2-smooth";
+const CACHE = "portal-v3-tracking-first";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
-  "./portal-v2.js",
+  "./portal-v3.js",
   "./manifest.webmanifest",
   "./icon.svg"
 ];
