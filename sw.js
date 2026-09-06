@@ -1,10 +1,10 @@
-const CACHE = "portal-v5-1-classic-worker";
+const CACHE = "portal-v6-resilient-tracking";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
-  "./portal-v5.js",
-  "./tracking-worker-v5.js",
+  "./portal-v6.js",
+  "./tracking-worker-v6.js",
   "./manifest.webmanifest",
   "./icon.svg"
 ];
