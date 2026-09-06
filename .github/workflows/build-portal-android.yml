@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  ANDROID_COMPILE_SDK: "35"
+  ANDROID_COMPILE_SDK: "36"
   ANDROID_BUILD_TOOLS: "35.0.0"
   HAND_MODEL_URL: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
 
@@ -41,10 +41,10 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platforms;android-${ANDROID_COMPILE_SDK}" "build-tools;${ANDROID_BUILD_TOOLS}"
 
-      - name: Setup Gradle 8.9
+      - name: Setup Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: "8.11.1"
           validate-wrappers: false
 
       - name: Fetch official MediaPipe Hand Landmarker model
