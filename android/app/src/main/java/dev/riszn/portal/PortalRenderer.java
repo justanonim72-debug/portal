@@ -23,9 +23,21 @@ final class PortalRenderer {
             new Style("RAW SHIELD",   0x1800D7FF, 0x1200D7FF, 0xFFE7FFFF, 0xFF61E8FF, false, false)
     };
 
+    // Official MediaPipe 21-point hand skeleton topology.
+    private static final int[][] HAND_CONNECTIONS = new int[][] {
+            {0,1},{1,5},{5,9},{9,13},{13,17},{17,0},
+            {1,2},{2,3},{3,4},
+            {5,6},{6,7},{7,8},
+            {9,10},{10,11},{11,12},
+            {13,14},{14,15},{15,16},
+            {17,18},{18,19},{19,20}
+    };
+
     private final AtomicReference<PortalState> stateRef;
     private float[] current = null;
+    private float[] target = null;
     private PortalState.Mode currentMode = PortalState.Mode.NONE;
+    private long lastTargetStateNs = -1L;
     private float visibility = 0f;
     private long lastDrawNs = System.nanoTime();
     private int styleIndex = 0;
@@ -61,30 +73,60 @@ final class PortalRenderer {
         float dt = Math.min(0.05f, Math.max(1f / 240f, (now - lastDrawNs) / 1_000_000_000f));
         lastDrawNs = now;
 
+        // Debug is diagnostic data, not portal geometry. Draw it even when a portal cannot be
+        // constructed, otherwise users cannot tell whether MediaPipe or geometry is at fault.
+        if (debug && raw != null) drawSkeletons(canvas, frame, raw);
+
         boolean fresh = raw != null && raw.mode != PortalState.Mode.NONE &&
                 (now - raw.producedAtNanos) < 260_000_000L;
         float targetVisibility = fresh ? 1f : 0f;
         float visibilityRate = fresh ? 14f : 7f;
         visibility += (targetVisibility - visibility) * (1f - (float) Math.exp(-visibilityRate * dt));
 
-        if (raw == null || raw.nodes.length < 6 || visibility < 0.01f) return true;
-        if (current == null || current.length != raw.nodes.length || currentMode != raw.mode) {
+        if (raw == null || raw.mode == PortalState.Mode.NONE || raw.nodes.length < 6 || visibility < 0.01f) {
+            return true;
+        }
+
+        // Only accept a new target once per detector result. Large one-frame landmark teleports
+        // are capped here, while normal intentional motion remains fast.
+        if (target == null || target.length != raw.nodes.length || currentMode != raw.mode) {
+            target = raw.nodes.clone();
             current = raw.nodes.clone();
             currentMode = raw.mode;
-        } else if (fresh) {
-            for (int i = 0; i < current.length / 2; i++) {
+            lastTargetStateNs = raw.producedAtNanos;
+        } else if (raw.producedAtNanos != lastTargetStateNs) {
+            for (int i = 0; i < raw.nodes.length / 2; i++) {
                 int j = i * 2;
-                float dx = raw.nodes[j] - current[j];
-                float dy = raw.nodes[j + 1] - current[j + 1];
+                float baseX = current[j];
+                float baseY = current[j + 1];
+                float dx = raw.nodes[j] - baseX;
+                float dy = raw.nodes[j + 1] - baseY;
                 float d = (float) Math.hypot(dx, dy);
-                boolean anchor = isAnchor(raw, i);
-                float rate;
-                if (anchor) rate = d > 0.08f ? 72f : (d > 0.025f ? 52f : 34f);
-                else rate = d > 0.08f ? 48f : (d > 0.025f ? 32f : 20f);
-                float a = 1f - (float) Math.exp(-rate * dt);
-                current[j] += dx * a;
-                current[j + 1] += dy * a;
+                float maxJump = isAnchor(raw, i) ? 0.145f : 0.115f;
+                if (d > maxJump) {
+                    float s = maxJump / d;
+                    dx *= s;
+                    dy *= s;
+                }
+                target[j] = baseX + dx;
+                target[j + 1] = baseY + dy;
             }
+            lastTargetStateNs = raw.producedAtNanos;
+        }
+
+        if (current == null || target == null) return true;
+        for (int i = 0; i < current.length / 2; i++) {
+            int j = i * 2;
+            float dx = target[j] - current[j];
+            float dy = target[j + 1] - current[j + 1];
+            float d = (float) Math.hypot(dx, dy);
+            boolean anchor = isAnchor(raw, i);
+            float rate;
+            if (anchor) rate = d > 0.08f ? 74f : (d > 0.025f ? 50f : 28f);
+            else rate = d > 0.08f ? 48f : (d > 0.025f ? 30f : 18f);
+            float a = 1f - (float) Math.exp(-rate * dt);
+            current[j] += dx * a;
+            current[j + 1] += dy * a;
         }
 
         PointF[] pts = new PointF[current.length / 2];
@@ -113,7 +155,6 @@ final class PortalRenderer {
             canvas.restore();
         }
 
-        // Multi-pass border gives a bright energy edge without expensive blur/shadow filters.
         strokePaint.setColor(withAlpha(style.edge, visibility * 0.16f));
         strokePaint.setStrokeWidth(18f);
         canvas.drawPath(path, strokePaint);
@@ -127,6 +168,33 @@ final class PortalRenderer {
         drawEnergyNodes(canvas, pts, raw, style, now);
         drawParticles(canvas, pts, style, now);
         return true;
+    }
+
+    private void drawSkeletons(Canvas canvas, Frame frame, PortalState raw) {
+        if (raw.skeletons == null) return;
+        for (int hand = 0; hand < raw.skeletons.length; hand++) {
+            float[] flat = raw.skeletons[hand];
+            if (flat == null || flat.length < 42) continue;
+            PointF[] p = new PointF[21];
+            for (int i = 0; i < 21; i++) p[i] = toBuffer(frame, flat[i * 2], flat[i * 2 + 1]);
+
+            int lineColor = hand == 0 ? 0xFF59E9FF : 0xFFFF63D8;
+            strokePaint.setColor(withAlpha(lineColor, 0.88f));
+            strokePaint.setStrokeWidth(3.2f);
+            for (int[] edge : HAND_CONNECTIONS) {
+                PointF a = p[edge[0]];
+                PointF b = p[edge[1]];
+                canvas.drawLine(a.x, a.y, b.x, b.y, strokePaint);
+            }
+
+            particlePaint.setColor(withAlpha(lineColor, 0.92f));
+            for (int i = 0; i < p.length; i++) {
+                float radius = (i == 4 || i == 8) ? 6.5f : 3.2f;
+                if (i == 4 || i == 8) particlePaint.setColor(0xFFFFFF55);
+                else particlePaint.setColor(withAlpha(lineColor, 0.92f));
+                canvas.drawCircle(p[i].x, p[i].y, radius, particlePaint);
+            }
+        }
     }
 
     private void drawGrid(Canvas c, Rect crop, Style style, long now) {
@@ -164,18 +232,13 @@ final class PortalRenderer {
             c.drawCircle(p.x, p.y, 13f + pulse * 4f, particlePaint);
             particlePaint.setColor(withAlpha(style.edge, visibility * 0.96f));
         }
-
-        if (debug) {
-            particlePaint.setColor(withAlpha(0xFFFFFF54, visibility));
-            for (PointF p : pts) c.drawCircle(p.x, p.y, 3.5f, particlePaint);
-        }
     }
 
     private void drawParticles(Canvas c, PointF[] pts, Style style, long now) {
         if (pts.length < 2) return;
         particlePaint.setColor(withAlpha(style.accent, visibility * 0.70f));
         long tick = now / 40_000_000L;
-        for (int k = 0; k < Math.min(12, pts.length * 2); k++) {
+        for (int k = 0; k < Math.min(10, pts.length * 2); k++) {
             int edge = (int) ((tick + k * 3L) % pts.length);
             PointF a = pts[edge];
             PointF b = pts[(edge + 1) % pts.length];
@@ -191,7 +254,7 @@ final class PortalRenderer {
         Path path = new Path();
         if (p.length < 3) return path;
         path.moveTo(p[0].x, p[0].y);
-        final float tension = 0.72f;
+        final float tension = 0.66f;
         for (int i = 0; i < p.length; i++) {
             PointF p0 = p[(i - 1 + p.length) % p.length];
             PointF p1 = p[i];
