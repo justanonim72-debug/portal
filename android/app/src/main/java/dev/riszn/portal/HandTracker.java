@@ -42,8 +42,6 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
     private volatile boolean frontCamera = true;
     private volatile String backend = "…";
 
-    // Reused direct RGBA staging buffer. ByteBuffer-backed MPImage.close() is a no-op for the
-    // caller-owned buffer, unlike BitmapImageBuilder whose MPImage container recycles the Bitmap.
     private ByteBuffer rgbaBuffer;
     private int rgbaWidth = -1;
     private int rgbaHeight = -1;
@@ -64,12 +62,19 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
 
     Executor executor() { return executor; }
 
-    void setFrontCamera(boolean front) { this.frontCamera = front; }
+    void setFrontCamera(boolean front) {
+        if (this.frontCamera != front) resetPortal();
+        this.frontCamera = front;
+    }
+
+    void resetPortal() {
+        stateRef.set(PortalState.none());
+        handler.post(geometry::reset);
+    }
 
     void initialize() {
         handler.post(() -> {
             try {
-                // GPU must be created and used on this same dedicated thread.
                 landmarker = create(Delegate.GPU);
                 backend = "GPU";
                 ready = true;
@@ -98,9 +103,6 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
                 .setBaseOptions(base)
                 .setRunningMode(RunningMode.VIDEO)
                 .setNumHands(2)
-                // Video test is dim and the second hand was frequently missed. Lower detection /
-                // presence only moderately; keep tracking at 0.50 to avoid turning noise into a
-                // persistent phantom hand.
                 .setMinHandDetectionConfidence(0.40f)
                 .setMinHandPresenceConfidence(0.42f)
                 .setMinTrackingConfidence(0.50f)
@@ -229,6 +231,7 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
     public void close() {
         ready = false;
         handler.post(() -> {
+            geometry.reset();
             if (landmarker != null) {
                 landmarker.close();
                 landmarker = null;
