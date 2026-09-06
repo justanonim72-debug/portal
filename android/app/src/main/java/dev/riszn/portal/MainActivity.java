@@ -65,6 +65,7 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
     private boolean frontCamera = true;
     private boolean debug = false;
     private boolean cameraConfigured = false;
+    private String trackingBackend = "GPU";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -137,7 +138,8 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
         debugButton.setOnClickListener(v -> {
             debug = !debug;
             portalRenderer.setDebug(debug);
-            debugButton.setText(debug ? "⌁·" : "⌁");
+            debugButton.setText(debug ? "✋" : "⌁");
+            toast(debug ? "Debug skeleton ON" : "Debug skeleton OFF");
         });
         flipButton.setOnClickListener(v -> switchCamera());
         recordButton.setOnClickListener(v -> toggleRecording());
@@ -217,7 +219,7 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
                         if (event instanceof VideoRecordEvent.Start) {
                             recordButton.setText("■");
                             recordButton.setTextColor(0xFFFF6779);
-                            setStatus("REC · " + backendLabel(), 0xFFFF6779);
+                            setStatus("REC · " + trackingBackend, 0xFFFF6779);
                         } else if (event instanceof VideoRecordEvent.Finalize) {
                             VideoRecordEvent.Finalize fin = (VideoRecordEvent.Finalize) event;
                             activeRecording = null;
@@ -239,6 +241,7 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
     @Override
     public void onBackendReady(String backend) {
         runOnUiThread(() -> {
+            trackingBackend = backend.startsWith("GPU") ? "GPU" : "CPU";
             int color = backend.startsWith("GPU") ? 0xFF61F3C2 : 0xFFFFC966;
             setStatus("TRACKING · " + backend, color);
         });
@@ -255,19 +258,35 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
     @Override
     public void onPerf(double inferenceMs, double detectorFps, int hands) {
         runOnUiThread(() -> {
-            perfText.setText(String.format(Locale.US, "%.1f ms · %.0f track/s · %d tangan", inferenceMs, detectorFps, hands));
-            if (activeRecording == null) {
-                PortalState s = portalState.get();
-                String mode = s.mode == PortalState.Mode.ONE_HAND ? "PINCH LOCK" :
-                        s.mode == PortalState.Mode.TWO_HAND ? "2 TANGAN" : "CARI TANGAN";
-                statusText.setText(mode + " · " + backendLabel());
-            }
-        });
-    }
+            PortalState s = portalState.get();
+            int rawHands = s == null ? hands : s.hands;
+            perfText.setText(String.format(Locale.US, "%.1f ms · %.0f track/s · %d tangan", inferenceMs, detectorFps, rawHands));
+            if (activeRecording != null) return;
 
-    private String backendLabel() {
-        String text = statusText == null ? "GPU" : statusText.getText().toString();
-        return text.contains("CPU") ? "CPU" : "GPU";
+            String mode;
+            int color;
+            if (rawHands >= 2) {
+                if (s != null && s.mode == PortalState.Mode.TWO_HAND) {
+                    mode = "2 TANGAN · LOCK";
+                    color = 0xFF61F3C2;
+                } else {
+                    mode = "2 TANGAN · ATUR JEMPOL+TELUNJUK";
+                    color = 0xFFFFC966;
+                }
+            } else if (rawHands == 1) {
+                if (s != null && s.mode == PortalState.Mode.ONE_HAND) {
+                    mode = "1 TANGAN · PINCH";
+                    color = 0xFF61F3C2;
+                } else {
+                    mode = "1 TANGAN · BUKA JEMPOL+TELUNJUK";
+                    color = 0xFFFFC966;
+                }
+            } else {
+                mode = "CARI TANGAN";
+                color = 0xFFFFC966;
+            }
+            setStatus(mode + " · " + trackingBackend, color);
+        });
     }
 
     private void setStatus(String text, int color) {
