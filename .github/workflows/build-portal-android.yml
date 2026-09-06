@@ -1,0 +1,88 @@
+name: Build Portal Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/build-portal-android.yml"
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_COMPILE_SDK: "35"
+  ANDROID_BUILD_TOOLS: "35.0.0"
+  HAND_MODEL_URL: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout Portal
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-${ANDROID_COMPILE_SDK}" "build-tools;${ANDROID_BUILD_TOOLS}"
+
+      - name: Setup Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+          validate-wrappers: false
+
+      - name: Fetch official MediaPipe Hand Landmarker model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android/app/src/main/assets
+          curl --fail --location --retry 4 --retry-delay 2 \
+            "$HAND_MODEL_URL" \
+            -o android/app/src/main/assets/hand_landmarker.task
+          test -s android/app/src/main/assets/hand_landmarker.task
+          sha256sum android/app/src/main/assets/hand_landmarker.task
+
+      - name: Build debug APK
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:assembleDebug --stacktrace
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/apksigner" verify "$APK"
+          "$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/zipalign" -c -P 16 4 "$APK"
+          mkdir -p dist
+          cp "$APK" dist/Portal-native-GPU-debug.apk
+          sha256sum dist/Portal-native-GPU-debug.apk > dist/SHA256SUMS
+
+      - name: Upload Portal APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Portal-Android-GPU
+          path: |
+            dist/Portal-native-GPU-debug.apk
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
