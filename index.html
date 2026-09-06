@@ -16,11 +16,9 @@
     <canvas id="stage" aria-label="Kamera dengan portal real-time"></canvas>
 
     <section id="intro" class="intro">
-      <div class="mark" aria-hidden="true">
-        <span></span><span></span><span></span><span></span>
-      </div>
+      <div class="mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
       <h1>PORTAL</h1>
-      <p>Dua tangan: 4 sudut portal nempel langsung ke jempol + telunjuk. Satu tangan: portal dikunci ke arah dan ukuran telapak.</p>
+      <p>Satu tangan: jempol + telunjuk jadi kontrol utama, jari lain cuma bantu arah dan bentuk. Dua tangan: empat ujung jari jadi empat sudut portal.</p>
       <button id="startBtn" class="primary" type="button">Mulai kamera</button>
       <small id="bootStatus">Menyiapkan hand tracking…</small>
     </section>
@@ -30,13 +28,15 @@
       <div class="fps-pill"><span id="fps">--</span> FPS</div>
     </header>
 
+    <div id="recBadge" class="rec-badge"><span></span> REC <b id="recTime">00:00</b></div>
     <aside id="hint" class="hint">Tunjukkan <b>satu atau dua tangan</b></aside>
 
     <nav class="controls" aria-label="Kontrol portal">
       <button id="filterBtn" class="control wide" type="button">
-        <span class="control-label">FILTER</span>
-        <strong id="filterName">THERMAL</strong>
+        <span class="control-label">EFFECT COMBO</span>
+        <strong id="filterName">THERMAL HOLO</strong>
       </button>
+      <button id="recBtn" class="control icon-btn rec-btn" type="button" aria-label="Mulai atau hentikan rekaman">●</button>
       <button id="debugBtn" class="control icon-btn" type="button" aria-label="Tampilkan titik tangan">⌁</button>
       <button id="cameraBtn" class="control icon-btn" type="button" aria-label="Ganti kamera">↺</button>
     </nav>
@@ -44,6 +44,6 @@
     <div id="toast" class="toast" role="status"></div>
   </main>
 
-  <script type="module" src="./portal-v3.js"></script>
+  <script type="module" src="./portal-v4.js"></script>
 </body>
 </html>
