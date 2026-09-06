@@ -18,7 +18,7 @@
     <section id="intro" class="intro">
       <div class="mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
       <h1>PORTAL</h1>
-      <p>V5: tracking jalan di worker terpisah. Satu tangan dikontrol jempol + telunjuk, sementara jari lain cuma melengkungkan membran portal.</p>
+      <p>V5.1: tracking jalan di worker terpisah. Satu tangan dikontrol jempol + telunjuk, sementara jari lain cuma melengkungkan membran portal.</p>
       <button id="startBtn" class="primary" type="button">Mulai kamera</button>
       <small id="bootStatus">Menyiapkan tracking worker…</small>
     </section>
@@ -44,6 +44,25 @@
     <div id="toast" class="toast" role="status"></div>
   </main>
 
+  <script>
+    // Portal V5 was authored with a module-worker constructor. MediaPipe's WASM
+    // bootstrap on Android/Chromium needs a classic worker so importScripts() is
+    // available. Keep every other Worker call untouched; only tracking-worker-v5
+    // drops the module option.
+    (() => {
+      const NativeWorker = window.Worker;
+      function PortalWorker(url, options) {
+        const name = String(url || "");
+        if (name.includes("tracking-worker-v5.js")) {
+          return new NativeWorker(url);
+        }
+        return new NativeWorker(url, options);
+      }
+      PortalWorker.prototype = NativeWorker.prototype;
+      Object.setPrototypeOf(PortalWorker, NativeWorker);
+      window.Worker = PortalWorker;
+    })();
+  </script>
   <script type="module" src="./portal-v5.js"></script>
 </body>
 </html>
