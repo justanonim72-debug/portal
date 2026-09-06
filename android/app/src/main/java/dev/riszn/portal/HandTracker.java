@@ -1,7 +1,6 @@
 package dev.riszn.portal;
 
 import android.content.Context;
-import android.graphics.Bitmap;
 import android.os.Handler;
 import android.os.HandlerThread;
 
@@ -9,7 +8,7 @@ import androidx.annotation.NonNull;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
 
-import com.google.mediapipe.framework.image.BitmapImageBuilder;
+import com.google.mediapipe.framework.image.ByteBufferImageBuilder;
 import com.google.mediapipe.framework.image.MPImage;
 import com.google.mediapipe.tasks.core.BaseOptions;
 import com.google.mediapipe.tasks.core.Delegate;
@@ -43,8 +42,14 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
     private volatile boolean frontCamera = true;
     private volatile String backend = "…";
 
-    private Bitmap bitmapBuffer;
-    private byte[] packedRgba;
+    // Reused native-order RGBA staging buffer. We intentionally do NOT use BitmapImageBuilder
+    // here: closing an MPImage backed by Bitmap recycles the source Bitmap inside MediaPipe.
+    // ByteBuffer-backed MPImage.close() does not free/recycle our buffer, so it is safe to reuse
+    // after synchronous detectForVideo() returns and the MPImage has been closed.
+    private ByteBuffer rgbaBuffer;
+    private int rgbaWidth = -1;
+    private int rgbaHeight = -1;
+
     private long lastTimestampMs = -1L;
     private long perfWindowStartNs = System.nanoTime();
     private int perfFrames = 0;
@@ -112,10 +117,19 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
         long started = System.nanoTime();
         MPImage mpImage = null;
         try {
-            ensureBitmap(imageProxy.getWidth(), imageProxy.getHeight());
-            copyRgba(imageProxy);
+            int width = imageProxy.getWidth();
+            int height = imageProxy.getHeight();
+            ensureRgbaBuffer(width, height);
+            copyRgba(imageProxy, width, height);
 
-            mpImage = new BitmapImageBuilder(bitmapBuffer).build();
+            rgbaBuffer.rewind();
+            mpImage = new ByteBufferImageBuilder(
+                    rgbaBuffer,
+                    width,
+                    height,
+                    MPImage.IMAGE_FORMAT_RGBA)
+                    .build();
+
             int rotation = imageProxy.getImageInfo().getRotationDegrees();
             ImageProcessingOptions processing = ImageProcessingOptions.builder()
                     .setRotationDegrees(rotation)
@@ -140,39 +154,57 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
         }
     }
 
-    private void ensureBitmap(int width, int height) {
-        if (bitmapBuffer == null || bitmapBuffer.getWidth() != width || bitmapBuffer.getHeight() != height) {
-            if (bitmapBuffer != null) bitmapBuffer.recycle();
-            bitmapBuffer = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-            packedRgba = null;
+    private void ensureRgbaBuffer(int width, int height) {
+        int required = width * height * 4;
+        if (rgbaBuffer == null || rgbaBuffer.capacity() != required || rgbaWidth != width || rgbaHeight != height) {
+            rgbaBuffer = ByteBuffer.allocateDirect(required);
+            rgbaWidth = width;
+            rgbaHeight = height;
         }
     }
 
-    private void copyRgba(ImageProxy imageProxy) {
+    private void copyRgba(ImageProxy imageProxy, int width, int height) {
         ImageProxy.PlaneProxy[] planes = imageProxy.getPlanes();
         if (planes.length == 0) throw new IllegalStateException("RGBA plane kosong");
-        ImageProxy.PlaneProxy plane = planes[0];
-        ByteBuffer src = plane.getBuffer().duplicate();
-        src.rewind();
 
-        int width = imageProxy.getWidth();
-        int height = imageProxy.getHeight();
-        int packedRow = width * 4;
+        ImageProxy.PlaneProxy plane = planes[0];
+        int pixelStride = plane.getPixelStride();
         int rowStride = plane.getRowStride();
+        int packedRow = width * 4;
+
+        if (pixelStride != 4) {
+            throw new IllegalStateException("RGBA pixelStride tak didukung: " + pixelStride);
+        }
+        if (rowStride < packedRow) {
+            throw new IllegalStateException("RGBA rowStride invalid: " + rowStride + " < " + packedRow);
+        }
+
+        ByteBuffer src = plane.getBuffer().duplicate();
+        rgbaBuffer.clear();
 
         if (rowStride == packedRow) {
-            bitmapBuffer.copyPixelsFromBuffer(src);
-            return;
+            int required = packedRow * height;
+            src.position(0);
+            src.limit(Math.min(src.capacity(), required));
+            if (src.remaining() < required) {
+                throw new IllegalStateException("RGBA buffer terlalu kecil: " + src.remaining() + " < " + required);
+            }
+            rgbaBuffer.put(src);
+        } else {
+            for (int y = 0; y < height; y++) {
+                int srcPos = y * rowStride;
+                int srcEnd = srcPos + packedRow;
+                if (srcEnd > src.capacity()) {
+                    throw new IllegalStateException("RGBA row melewati buffer pada y=" + y);
+                }
+                src.position(srcPos);
+                src.limit(srcEnd);
+                rgbaBuffer.put(src);
+                src.limit(src.capacity());
+            }
         }
 
-        int required = packedRow * height;
-        if (packedRgba == null || packedRgba.length != required) packedRgba = new byte[required];
-        for (int y = 0; y < height; y++) {
-            int srcPos = y * rowStride;
-            src.position(srcPos);
-            src.get(packedRgba, y * packedRow, packedRow);
-        }
-        bitmapBuffer.copyPixelsFromBuffer(ByteBuffer.wrap(packedRgba));
+        rgbaBuffer.flip();
     }
 
     private void updatePerf(double ms, int hands) {
@@ -199,10 +231,9 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
                 landmarker.close();
                 landmarker = null;
             }
-            if (bitmapBuffer != null) {
-                bitmapBuffer.recycle();
-                bitmapBuffer = null;
-            }
+            rgbaBuffer = null;
+            rgbaWidth = -1;
+            rgbaHeight = -1;
             thread.quitSafely();
         });
     }
