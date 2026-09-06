@@ -179,13 +179,14 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
         if (cameraController == null) return;
         frontCamera = !frontCamera;
         handTracker.setFrontCamera(frontCamera);
-        portalState.set(PortalState.none());
+        handTracker.resetPortal();
         try {
             cameraController.setCameraSelector(frontCamera ? CameraSelector.DEFAULT_FRONT_CAMERA : CameraSelector.DEFAULT_BACK_CAMERA);
             toast(frontCamera ? "Kamera depan" : "Kamera belakang");
         } catch (Throwable t) {
             frontCamera = !frontCamera;
             handTracker.setFrontCamera(frontCamera);
+            handTracker.resetPortal();
             toast("Kamera itu nggak tersedia");
         }
     }
@@ -243,7 +244,7 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
         runOnUiThread(() -> {
             trackingBackend = backend.startsWith("GPU") ? "GPU" : "CPU";
             int color = backend.startsWith("GPU") ? 0xFF61F3C2 : 0xFFFFC966;
-            setStatus("TRACKING · " + backend, color);
+            setStatus("PINCH JARI + JEMPOL UNTUK BUKA · " + trackingBackend, color);
         });
     }
 
@@ -263,26 +264,22 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
             perfText.setText(String.format(Locale.US, "%.1f ms · %.0f track/s · %d tangan", inferenceMs, detectorFps, rawHands));
             if (activeRecording != null) return;
 
+            boolean portalActive = s != null && s.mode != PortalState.Mode.NONE;
             String mode;
             int color;
-            if (rawHands >= 2) {
-                if (s != null && s.mode == PortalState.Mode.TWO_HAND) {
-                    mode = "2 TANGAN · LOCK";
-                    color = 0xFF61F3C2;
-                } else {
-                    mode = "2 TANGAN · ATUR JEMPOL+TELUNJUK";
+            if (portalActive) {
+                if (rawHands == 0) {
+                    mode = "PORTAL AKTIF · TUNJUKKAN TANGAN";
                     color = 0xFFFFC966;
-                }
-            } else if (rawHands == 1) {
-                if (s != null && s.mode == PortalState.Mode.ONE_HAND) {
-                    mode = "1 TANGAN · PINCH";
-                    color = 0xFF61F3C2;
                 } else {
-                    mode = "1 TANGAN · BUKA JEMPOL+TELUNJUK";
-                    color = 0xFFFFC966;
+                    mode = "PORTAL AKTIF · SENTUH TEPI + TARIK";
+                    color = 0xFF61F3C2;
                 }
+            } else if (rawHands > 0) {
+                mode = "PINCH JARI + JEMPOL UNTUK BUKA";
+                color = 0xFFFFC966;
             } else {
-                mode = "CARI TANGAN";
+                mode = "CARI TANGAN · LALU PINCH";
                 color = 0xFFFFC966;
             }
             setStatus(mode + " · " + trackingBackend, color);
