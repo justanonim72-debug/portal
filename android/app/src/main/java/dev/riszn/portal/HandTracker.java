@@ -4,7 +4,6 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.os.SystemClock;
 
 import androidx.annotation.NonNull;
 import androidx.camera.core.ImageAnalysis;
@@ -13,6 +12,7 @@ import androidx.camera.core.ImageProxy;
 import com.google.mediapipe.framework.image.BitmapImageBuilder;
 import com.google.mediapipe.framework.image.MPImage;
 import com.google.mediapipe.tasks.core.BaseOptions;
+import com.google.mediapipe.tasks.core.Delegate;
 import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions;
 import com.google.mediapipe.tasks.vision.core.RunningMode;
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker;
@@ -66,13 +66,13 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
     void initialize() {
         handler.post(() -> {
             try {
-                landmarker = create(BaseOptions.Delegate.GPU);
+                landmarker = create(Delegate.GPU);
                 backend = "GPU";
                 ready = true;
                 listener.onBackendReady(backend);
             } catch (Throwable gpuError) {
                 try {
-                    landmarker = create(BaseOptions.Delegate.CPU);
+                    landmarker = create(Delegate.CPU);
                     backend = "CPU fallback";
                     ready = true;
                     listener.onBackendReady(backend);
@@ -84,7 +84,7 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
         });
     }
 
-    private HandLandmarker create(BaseOptions.Delegate delegate) {
+    private HandLandmarker create(Delegate delegate) {
         BaseOptions base = BaseOptions.builder()
                 .setModelAssetPath(MODEL)
                 .setDelegate(delegate)
