@@ -1,9 +1,9 @@
-const CACHE = "portal-v1";
+const CACHE = "portal-v2-smooth";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
-  "./app.js",
+  "./portal-v2.js",
   "./manifest.webmanifest",
   "./icon.svg"
 ];
@@ -25,8 +25,6 @@ self.addEventListener("fetch", event => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Network-first while online so every push is visible immediately.
-  // Cache is only the offline fallback.
   event.respondWith(
     fetch(event.request)
       .then(response => {
