@@ -1,0 +1,19 @@
+{
+  "name": "Portal — Hand Tracking Camera",
+  "short_name": "Portal",
+  "description": "Portal kamera real-time yang mengikuti dua tangan menggunakan MediaPipe Hand Landmarker.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#05070a",
+  "theme_color": "#05070a",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
