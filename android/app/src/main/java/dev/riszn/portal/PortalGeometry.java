@@ -1,5 +1,7 @@
 package dev.riszn.portal;
 
+import android.graphics.Matrix;
+
 import com.google.mediapipe.tasks.components.containers.Category;
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult;
@@ -12,12 +14,9 @@ final class PortalGeometry {
     private static final int[] FINGER_DIPS = {7, 11, 15, 19};
     private static final int[] FINGER_PIPS = {6, 10, 14, 18};
 
-    // Pinch is normalized by hand scale, so trigger sensitivity does not depend on camera distance.
-    // ENTER and EXIT differ on purpose: hysteresis prevents rapid open/close flicker near threshold.
     private static final float PINCH_ON = 0.34f;
     private static final float PINCH_OFF = 0.50f;
     private static final int TRIGGER_HOLD_FRAMES = 2;
-
     private static final int GRAB_HOLD_FRAMES = 2;
     private static final int GRAB_MISS_FRAMES = 3;
     private static final long NO_HAND_CLOSE_NS = 1_050_000_000L;
@@ -38,8 +37,15 @@ final class PortalGeometry {
     private int pendingHandle = -1;
     private int pendingVotes = 0;
     private Vec pendingTip = null;
-
     private long lastHandSeenNs = 0L;
+
+    // Metadata of the latest ImageAnalysis frame. Geometry stays in MediaPipe's rotated/display
+    // normalized space, but renderer needs this exact transform to place it on Preview/Video.
+    private Matrix analysisToSensor = new Matrix();
+    private int analysisWidth = 1;
+    private int analysisHeight = 1;
+    private int analysisRotation = 0;
+    private boolean sourceMirrored = false;
 
     synchronized void reset() {
         active = false;
@@ -50,8 +56,20 @@ final class PortalGeometry {
         clearPendingGrab();
     }
 
-    synchronized PortalState fromResult(HandLandmarkerResult result, boolean mirrorX) {
+    synchronized PortalState fromResult(
+            HandLandmarkerResult result,
+            boolean mirrorX,
+            Matrix frameAnalysisToSensor,
+            int frameWidth,
+            int frameHeight,
+            int frameRotation) {
         long now = System.nanoTime();
+        analysisToSensor = frameAnalysisToSensor == null ? new Matrix() : new Matrix(frameAnalysisToSensor);
+        analysisWidth = Math.max(1, frameWidth);
+        analysisHeight = Math.max(1, frameHeight);
+        analysisRotation = normalizeRotation(frameRotation);
+        sourceMirrored = mirrorX;
+
         List<List<NormalizedLandmark>> hands = result.landmarks();
         int detected = hands == null ? 0 : Math.min(2, hands.size());
 
@@ -66,21 +84,31 @@ final class PortalGeometry {
 
         if (!active) {
             updateTrigger(hands, detected, mirrorX);
-            if (!active) return PortalState.invalid(detected, skeletons, handedness);
+            if (!active) return invalidState(detected, skeletons, handedness);
         }
 
-        // Once summoned, the portal persists. Losing all hands briefly does not instantly destroy
-        // it; a >1 s absence closes it and requires a fresh pinch trigger.
         if (detected == 0) {
             if (lastHandSeenNs != 0L && now - lastHandSeenNs > NO_HAND_CLOSE_NS) {
                 reset();
-                return PortalState.none();
+                return invalidState(0, skeletons, handedness);
             }
             return buildActiveState(0, skeletons, handedness);
         }
 
         updateStretch(hands, detected, mirrorX);
         return buildActiveState(detected, skeletons, handedness);
+    }
+
+    private PortalState invalidState(int detected, float[][] skeletons, String[] handedness) {
+        return PortalState.invalid(
+                detected,
+                skeletons,
+                handedness,
+                analysisToSensor,
+                analysisWidth,
+                analysisHeight,
+                analysisRotation,
+                sourceMirrored);
     }
 
     private void updateTrigger(List<List<NormalizedLandmark>> hands, int detected, boolean mirrorX) {
@@ -139,8 +167,6 @@ final class PortalGeometry {
     }
 
     private void summon(Pinch pinch) {
-        // Initial portal diameter is strictly capped below one visible finger segment. This is the
-        // seed/rift the user creates by touching thumb to ANY fingertip.
         float diameter = Math.min(pinch.segmentLength * 0.88f, pinch.handScale * 0.22f);
         diameter = clamp(diameter, 0.018f, 0.060f);
 
@@ -210,7 +236,6 @@ final class PortalGeometry {
             for (int slot = 0; slot < FINGER_TIPS.length; slot++) {
                 Vec tip = p(h, FINGER_TIPS[slot], mirrorX);
                 float pinchRatio = dist(thumb, tip) / Math.max(scale, 1e-5f);
-                // A finger still touching the thumb is a trigger/pinch finger, not a stretch tool.
                 if (pinchRatio < PINCH_OFF) continue;
                 out.add(new FingerPoint(tip));
             }
@@ -296,8 +321,12 @@ final class PortalGeometry {
                 skeletons,
                 handedness,
                 System.nanoTime(),
-                detected
-        );
+                detected,
+                analysisToSensor,
+                analysisWidth,
+                analysisHeight,
+                analysisRotation,
+                sourceMirrored);
     }
 
     private Vec[] ellipseNodes(int count) {
@@ -306,7 +335,6 @@ final class PortalGeometry {
             double angle = Math.PI * 2.0 * i / count;
             float c = (float) Math.cos(angle);
             float s = (float) Math.sin(angle);
-            // Tiny deterministic edge breathing keeps it portal-like without changing control pose.
             float ripple = 1f + 0.018f * (float) Math.sin(angle * 3.0);
             out[i] = add(center,
                     add(mul(axisU, halfWidth * c * ripple),
@@ -315,7 +343,6 @@ final class PortalGeometry {
         return out;
     }
 
-    // Cardinal stretch handles: +U, +V, -U, -V.
     private Vec[] handles() {
         return new Vec[] {
                 add(center, mul(axisU, halfWidth)),
@@ -388,6 +415,14 @@ final class PortalGeometry {
     }
     private static Vec perpendicular(Vec a) { return new Vec(-a.y, a.x); }
     private static float clamp(float v, float lo, float hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    private static int normalizeRotation(int degrees) {
+        int d = ((degrees % 360) + 360) % 360;
+        if (d < 45 || d >= 315) return 0;
+        if (d < 135) return 90;
+        if (d < 225) return 180;
+        return 270;
+    }
 
     private static final class Vec {
         final float x, y;
