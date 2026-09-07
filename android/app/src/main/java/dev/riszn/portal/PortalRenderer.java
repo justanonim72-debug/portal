@@ -15,12 +15,14 @@ import androidx.camera.effects.Frame;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class PortalRenderer {
+    // Keep effects readable, but visually much closer to the reference: translucent filtered panel,
+    // thin bright perimeter, minimal decoration. No giant round glow / particle halo.
     private static final Style[] STYLES = new Style[] {
-            new Style("THERMAL HOLO", 0x5A00D9FF, 0x42FF55CC, 0xFFB8F7FF, 0xFF4FE5FF, true, true),
-            new Style("VOID NEON",    0x531E073F, 0x4D00A8FF, 0xFFB789FF, 0xFF38E8FF, true, false),
-            new Style("XRAY GLITCH", 0x462A7FA8, 0x3649E7FF, 0xFFF0FCFF, 0xFF82CFFF, true, false),
-            new Style("HOLOGRAM+",    0x3D00C9E8, 0x353BFFD0, 0xFFC8FFFF, 0xFF63E8FF, true, true),
-            new Style("RAW SHIELD",   0x1800D7FF, 0x1200D7FF, 0xFFE7FFFF, 0xFF61E8FF, false, false)
+            new Style("THERMAL HOLO", 0x3600CFFF, 0x30FF4FCB, 0xFFE8FCFF, 0xFF55E8FF, true, false),
+            new Style("VOID NEON",    0x351A083A, 0x342C7FFF, 0xFFE6E9FF, 0xFF9B76FF, true, false),
+            new Style("XRAY GLITCH", 0x30216078, 0x2B54BFFF, 0xFFF5FCFF, 0xFF82D3FF, true, false),
+            new Style("HOLOGRAM+",    0x3000C9E8, 0x2B39E7D0, 0xFFE9FFFF, 0xFF63E8FF, true, true),
+            new Style("RAW SHIELD",   0x1100D7FF, 0x0D00D7FF, 0xFFF0FFFF, 0xFF61E8FF, false, false)
     };
 
     private static final int[][] HAND_CONNECTIONS = new int[][] {
@@ -96,11 +98,11 @@ final class PortalRenderer {
         lastDrawNs = now;
 
         boolean freshPortal = raw != null && raw.mode != PortalState.Mode.NONE &&
-                raw.nodes != null && raw.nodes.length >= 6 &&
+                raw.nodes != null && raw.nodes.length >= 8 &&
                 (now - raw.producedAtNanos) < 320_000_000L;
 
         float targetVisibility = freshPortal ? 1f : 0f;
-        float visibilityRate = freshPortal ? 18f : 9f;
+        float visibilityRate = freshPortal ? 20f : 10f;
         visibility += (targetVisibility - visibility) * (1f - (float) Math.exp(-visibilityRate * dt));
         if (!freshPortal && visibility < 0.008f) visibility = 0f;
 
@@ -121,7 +123,7 @@ final class PortalRenderer {
 
         if (hasDebug && raw != null) drawSkeletons(canvas, frame, raw, now);
 
-        if (!hasPortal || raw == null || raw.mode == PortalState.Mode.NONE || raw.nodes == null || raw.nodes.length < 6) {
+        if (!hasPortal || raw == null || raw.mode == PortalState.Mode.NONE || raw.nodes == null || raw.nodes.length < 8) {
             if (!freshPortal && visibility == 0f) {
                 current = null;
                 target = null;
@@ -142,7 +144,7 @@ final class PortalRenderer {
                 float dx = raw.nodes[j] - baseX;
                 float dy = raw.nodes[j + 1] - baseY;
                 float d = (float) Math.hypot(dx, dy);
-                float maxJump = isAnchor(raw, i) ? 0.16f : 0.13f;
+                float maxJump = 0.15f;
                 if (d > maxJump) {
                     float s = maxJump / d;
                     dx *= s;
@@ -154,12 +156,14 @@ final class PortalRenderer {
             lastTargetStateNs = raw.producedAtNanos;
         }
 
+        // All four corners are direct manipulation anchors, so keep them responsive. Small motion
+        // gets enough damping to stop shimmer; deliberate pulls catch up quickly.
         for (int i = 0; i < current.length / 2; i++) {
             int j = i * 2;
             float dx = target[j] - current[j];
             float dy = target[j + 1] - current[j + 1];
             float d = (float) Math.hypot(dx, dy);
-            float rate = d > 0.08f ? 62f : (d > 0.025f ? 42f : 26f);
+            float rate = d > 0.075f ? 70f : (d > 0.022f ? 48f : 28f);
             float a = 1f - (float) Math.exp(-rate * dt);
             current[j] += dx * a;
             current[j + 1] += dy * a;
@@ -170,7 +174,8 @@ final class PortalRenderer {
             pts[i] = toBuffer(frame, raw, current[i * 2], current[i * 2 + 1]);
         }
 
-        Path path = smoothClosedPath(pts);
+        // Four-corner reference panel: almost straight sides with only tiny rounded corners.
+        Path path = referenceQuadPath(pts);
         Style style = STYLES[styleIndex];
         Rect crop = frame.getCropRect();
 
@@ -191,18 +196,18 @@ final class PortalRenderer {
             canvas.restore();
         }
 
-        strokePaint.setColor(withAlpha(style.edge, visibility * 0.15f));
-        strokePaint.setStrokeWidth(16f);
-        canvas.drawPath(path, strokePaint);
-        strokePaint.setColor(withAlpha(style.accent, visibility * 0.28f));
-        strokePaint.setStrokeWidth(7f);
+        // Thin layered perimeter like the first reference video, not a thick circular aura.
+        strokePaint.setColor(withAlpha(style.accent, visibility * 0.18f));
+        strokePaint.setStrokeWidth(8f);
         canvas.drawPath(path, strokePaint);
         strokePaint.setColor(withAlpha(style.edge, visibility * 0.98f));
-        strokePaint.setStrokeWidth(2.2f);
+        strokePaint.setStrokeWidth(2.0f);
+        canvas.drawPath(path, strokePaint);
+        strokePaint.setColor(withAlpha(style.accent, visibility * 0.62f));
+        strokePaint.setStrokeWidth(0.9f);
         canvas.drawPath(path, strokePaint);
 
         drawEnergyNodes(canvas, pts, raw, style, now);
-        drawParticles(canvas, pts, style, now);
         return true;
     }
 
@@ -309,10 +314,10 @@ final class PortalRenderer {
     }
 
     private void drawGrid(Canvas c, Rect crop, Style style, long now) {
-        strokePaint.setStrokeWidth(1f);
-        strokePaint.setColor(withAlpha(style.accent, visibility * 0.13f));
-        float step = Math.max(28f, Math.min(crop.width(), crop.height()) / 14f);
-        float drift = ((now / 1_000_000L) % 1200L) / 1200f * step;
+        strokePaint.setStrokeWidth(0.8f);
+        strokePaint.setColor(withAlpha(style.accent, visibility * 0.09f));
+        float step = Math.max(32f, Math.min(crop.width(), crop.height()) / 12f);
+        float drift = ((now / 1_000_000L) % 1400L) / 1400f * step;
         for (float x = crop.left - step + drift; x < crop.right + step; x += step) {
             c.drawLine(x, crop.top, x, crop.bottom, strokePaint);
         }
@@ -322,62 +327,80 @@ final class PortalRenderer {
     }
 
     private void drawScan(Canvas c, Rect crop, Style style, long now) {
-        float travel = ((now / 1_000_000L) % 1500L) / 1500f;
+        float travel = ((now / 1_000_000L) % 1650L) / 1650f;
         float y = crop.top + travel * crop.height();
-        strokePaint.setColor(withAlpha(style.edge, visibility * 0.30f));
-        strokePaint.setStrokeWidth(3.2f);
+        strokePaint.setColor(withAlpha(style.edge, visibility * 0.20f));
+        strokePaint.setStrokeWidth(2.0f);
         c.drawLine(crop.left, y, crop.right, y, strokePaint);
-        strokePaint.setColor(withAlpha(style.accent, visibility * 0.11f));
-        strokePaint.setStrokeWidth(12f);
+        strokePaint.setColor(withAlpha(style.accent, visibility * 0.07f));
+        strokePaint.setStrokeWidth(8f);
         c.drawLine(crop.left, y, crop.right, y, strokePaint);
     }
 
     private void drawEnergyNodes(Canvas c, PointF[] pts, PortalState raw, Style style, long now) {
-        float pulse = 0.5f + 0.5f * (float) Math.sin(now / 120_000_000.0);
-        particlePaint.setColor(withAlpha(style.edge, visibility * 0.96f));
+        if (pts.length < 4) return;
+        float pulse = 0.5f + 0.5f * (float) Math.sin(now / 150_000_000.0);
         for (int anchor : raw.anchors) {
             if (anchor < 0 || anchor >= pts.length) continue;
             PointF p = pts[anchor];
-            c.drawCircle(p.x, p.y, 4.2f + pulse * 1.8f, particlePaint);
-            particlePaint.setColor(withAlpha(style.accent, visibility * 0.16f));
-            c.drawCircle(p.x, p.y, 11f + pulse * 3f, particlePaint);
-            particlePaint.setColor(withAlpha(style.edge, visibility * 0.96f));
+            particlePaint.setColor(withAlpha(style.edge, visibility * 0.95f));
+            c.drawCircle(p.x, p.y, 2.4f + pulse * 0.7f, particlePaint);
+            particlePaint.setColor(withAlpha(style.accent, visibility * 0.10f));
+            c.drawCircle(p.x, p.y, 6.0f + pulse * 1.5f, particlePaint);
         }
     }
 
-    private void drawParticles(Canvas c, PointF[] pts, Style style, long now) {
-        if (pts.length < 2) return;
-        particlePaint.setColor(withAlpha(style.accent, visibility * 0.62f));
-        long tick = now / 48_000_000L;
-        for (int k = 0; k < Math.min(8, pts.length); k++) {
-            int edge = (int) ((tick + k * 3L) % pts.length);
-            PointF a = pts[edge];
-            PointF b = pts[(edge + 1) % pts.length];
-            float t = ((tick * 17L + k * 29L) % 100L) / 100f;
-            float x = a.x + (b.x - a.x) * t;
-            float y = a.y + (b.y - a.y) * t;
-            c.drawCircle(x, y, 1.1f + (k % 3) * 0.35f, particlePaint);
-        }
-    }
-
-    private static Path smoothClosedPath(PointF[] p) {
+    /**
+     * Reference-style four-sided portal. Sides stay straight. Corners only get a very small radius
+     * so a stretched rectangle/trapezoid never turns into the oval/leaf shape from old builds.
+     */
+    private static Path referenceQuadPath(PointF[] p) {
         Path path = new Path();
-        if (p.length < 3) return path;
-        path.moveTo(p[0].x, p[0].y);
-        final float tension = 0.62f;
-        for (int i = 0; i < p.length; i++) {
-            PointF p0 = p[(i - 1 + p.length) % p.length];
-            PointF p1 = p[i];
-            PointF p2 = p[(i + 1) % p.length];
-            PointF p3 = p[(i + 2) % p.length];
-            float c1x = p1.x + (p2.x - p0.x) * tension / 6f;
-            float c1y = p1.y + (p2.y - p0.y) * tension / 6f;
-            float c2x = p2.x - (p3.x - p1.x) * tension / 6f;
-            float c2y = p2.y - (p3.y - p1.y) * tension / 6f;
-            path.cubicTo(c1x, c1y, c2x, c2y, p2.x, p2.y);
+        if (p == null || p.length < 4) return path;
+        if (p.length != 4) {
+            path.moveTo(p[0].x, p[0].y);
+            for (int i = 1; i < p.length; i++) path.lineTo(p[i].x, p[i].y);
+            path.close();
+            return path;
+        }
+
+        float[] radius = new float[4];
+        for (int i = 0; i < 4; i++) {
+            PointF prev = p[(i + 3) % 4];
+            PointF cur = p[i];
+            PointF next = p[(i + 1) % 4];
+            float a = distance(cur, prev);
+            float b = distance(cur, next);
+            radius[i] = Math.min(10f, Math.min(a, b) * 0.075f);
+        }
+
+        PointF start = toward(p[0], p[1], radius[0]);
+        path.moveTo(start.x, start.y);
+        for (int step = 1; step <= 4; step++) {
+            int i = step % 4;
+            PointF prev = p[(i + 3) % 4];
+            PointF cur = p[i];
+            PointF next = p[(i + 1) % 4];
+            PointF approach = toward(cur, prev, radius[i]);
+            PointF depart = toward(cur, next, radius[i]);
+            path.lineTo(approach.x, approach.y);
+            path.quadTo(cur.x, cur.y, depart.x, depart.y);
         }
         path.close();
         return path;
+    }
+
+    private static PointF toward(PointF from, PointF to, float distance) {
+        float dx = to.x - from.x;
+        float dy = to.y - from.y;
+        float d = (float) Math.hypot(dx, dy);
+        if (d < 1e-4f || distance <= 0f) return new PointF(from.x, from.y);
+        float t = Math.min(1f, distance / d);
+        return new PointF(from.x + dx * t, from.y + dy * t);
+    }
+
+    private static float distance(PointF a, PointF b) {
+        return (float) Math.hypot(a.x - b.x, a.y - b.y);
     }
 
     /**
@@ -427,12 +450,6 @@ final class PortalRenderer {
     private static float wristDistance(float[] a, float[] b) {
         if (a == null || b == null || a.length < 2 || b.length < 2) return Float.MAX_VALUE / 4f;
         return (float) Math.hypot(a[0] - b[0], a[1] - b[1]);
-    }
-
-    private static boolean isAnchor(PortalState s, int nodeIndex) {
-        if (s == null || s.anchors == null) return false;
-        for (int i : s.anchors) if (i == nodeIndex) return true;
-        return false;
     }
 
     private static int withAlpha(int color, float alpha) {
