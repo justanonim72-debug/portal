@@ -1,6 +1,7 @@
 package dev.riszn.portal;
 
 import android.content.Context;
+import android.graphics.Matrix;
 import android.os.Handler;
 import android.os.HandlerThread;
 
@@ -75,6 +76,7 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
     void initialize() {
         handler.post(() -> {
             try {
+                // MediaPipe GPU delegate must be created and used on this same worker thread.
                 landmarker = create(Delegate.GPU);
                 backend = "GPU";
                 ready = true;
@@ -123,6 +125,17 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
         try {
             int width = imageProxy.getWidth();
             int height = imageProxy.getHeight();
+            int rotation = imageProxy.getImageInfo().getRotationDegrees();
+
+            // CameraX exposes the authoritative mapping from sensor coordinates to THIS
+            // ImageAnalysis buffer. Invert it now so renderer can later map:
+            // analysis buffer -> camera sensor -> OverlayEffect buffer.
+            Matrix sensorToAnalysis = imageProxy.getImageInfo().getSensorToBufferTransformMatrix();
+            Matrix analysisToSensor = new Matrix();
+            if (sensorToAnalysis == null || !sensorToAnalysis.invert(analysisToSensor)) {
+                analysisToSensor.reset();
+            }
+
             ensureRgbaBuffer(width, height);
             copyRgba(imageProxy, width, height);
 
@@ -134,7 +147,6 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
                     MPImage.IMAGE_FORMAT_RGBA)
                     .build();
 
-            int rotation = imageProxy.getImageInfo().getRotationDegrees();
             ImageProcessingOptions processing = ImageProcessingOptions.builder()
                     .setRotationDegrees(rotation)
                     .build();
@@ -144,7 +156,13 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
             lastTimestampMs = timestampMs;
 
             HandLandmarkerResult result = landmarker.detectForVideo(mpImage, processing, timestampMs);
-            PortalState portal = geometry.fromResult(result, frontCamera);
+            PortalState portal = geometry.fromResult(
+                    result,
+                    frontCamera,
+                    analysisToSensor,
+                    width,
+                    height,
+                    rotation);
             stateRef.set(portal);
 
             double ms = (System.nanoTime() - started) / 1_000_000.0;
