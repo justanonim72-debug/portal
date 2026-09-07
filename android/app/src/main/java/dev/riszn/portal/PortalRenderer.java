@@ -23,7 +23,6 @@ final class PortalRenderer {
             new Style("RAW SHIELD",   0x1800D7FF, 0x1200D7FF, 0xFFE7FFFF, 0xFF61E8FF, false, false)
     };
 
-    // MediaPipe's canonical 21-point hand topology.
     private static final int[][] HAND_CONNECTIONS = new int[][] {
             {0,1},{1,5},{5,9},{9,13},{13,17},{17,0},
             {1,2},{2,3},{3,4},
@@ -36,7 +35,6 @@ final class PortalRenderer {
     private static final long SKELETON_STALE_NS = 300_000_000L;
 
     private final AtomicReference<PortalState> stateRef;
-
     private float[] current = null;
     private float[] target = null;
     private long lastTargetStateNs = -1L;
@@ -46,9 +44,6 @@ final class PortalRenderer {
     private volatile boolean debug = false;
     private boolean overlayWasDrawn = false;
 
-    // Separate target/current arrays let the 12-20 Hz detector feed a skeleton that is rendered
-    // on every CameraX preview frame. Assignment is nearest-wrist based so two hands do not swap
-    // visual identities every time MediaPipe changes result ordering.
     private final float[][] skeletonTarget = new float[2][];
     private final float[][] skeletonCurrent = new float[2][];
     private final long[] skeletonSeenNs = new long[] {0L, 0L};
@@ -118,16 +113,13 @@ final class PortalRenderer {
         boolean hasDebug = debug && hasFreshSkeleton(now);
         boolean hasPortal = visibility > 0.008f && (freshPortal || current != null);
         boolean needCanvas = hasDebug || hasPortal || overlayWasDrawn;
-
-        // getOverlayCanvas() performs synchronization work. Do not call it on completely idle
-        // frames; CameraX explicitly recommends only locking the canvas when an overlay is needed.
         if (!needCanvas) return true;
 
         Canvas canvas = frame.getOverlayCanvas();
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
         overlayWasDrawn = hasDebug || hasPortal;
 
-        if (hasDebug) drawSkeletons(canvas, frame, now);
+        if (hasDebug && raw != null) drawSkeletons(canvas, frame, raw, now);
 
         if (!hasPortal || raw == null || raw.mode == PortalState.Mode.NONE || raw.nodes == null || raw.nodes.length < 6) {
             if (!freshPortal && visibility == 0f) {
@@ -138,9 +130,6 @@ final class PortalRenderer {
             return true;
         }
 
-        // Portal target acceptance is detector-rate; interpolation below is preview-rate.
-        // Mode (one/two detected hands) no longer resets geometry because the new portal is a
-        // persistent object and a second hand is merely another manipulation tool.
         if (target == null || target.length != raw.nodes.length || current == null || current.length != raw.nodes.length) {
             target = raw.nodes.clone();
             current = raw.nodes.clone();
@@ -178,7 +167,7 @@ final class PortalRenderer {
 
         PointF[] pts = new PointF[current.length / 2];
         for (int i = 0; i < pts.length; i++) {
-            pts[i] = toBuffer(frame, current[i * 2], current[i * 2 + 1]);
+            pts[i] = toBuffer(frame, raw, current[i * 2], current[i * 2 + 1]);
         }
 
         Path path = smoothClosedPath(pts);
@@ -234,15 +223,12 @@ final class PortalRenderer {
                     setSkeletonTarget(0, a, now);
                     setSkeletonTarget(1, b, now);
                 }
+            } else if (a[0] <= b[0]) {
+                setSkeletonTarget(0, a, now);
+                setSkeletonTarget(1, b, now);
             } else {
-                // Stable left-to-right ordering for initial assignment.
-                if (a[0] <= b[0]) {
-                    setSkeletonTarget(0, a, now);
-                    setSkeletonTarget(1, b, now);
-                } else {
-                    setSkeletonTarget(0, b, now);
-                    setSkeletonTarget(1, a, now);
-                }
+                setSkeletonTarget(0, b, now);
+                setSkeletonTarget(1, a, now);
             }
             return;
         }
@@ -277,7 +263,6 @@ final class PortalRenderer {
                 float dx = tgt[j] - cur[j];
                 float dy = tgt[j + 1] - cur[j + 1];
                 float d = (float) Math.hypot(dx, dy);
-                // Fingertips respond faster; tiny motion is damped more heavily than deliberate motion.
                 boolean tip = i == 4 || i == 8 || i == 12 || i == 16 || i == 20;
                 float rate;
                 if (tip) rate = d > 0.055f ? 58f : (d > 0.018f ? 40f : 24f);
@@ -296,14 +281,14 @@ final class PortalRenderer {
         return false;
     }
 
-    private void drawSkeletons(Canvas canvas, Frame frame, long now) {
+    private void drawSkeletons(Canvas canvas, Frame frame, PortalState raw, long now) {
         for (int hand = 0; hand < 2; hand++) {
             float[] flat = skeletonCurrent[hand];
             if (flat == null || flat.length < 42 || now - skeletonSeenNs[hand] > SKELETON_STALE_NS) continue;
 
             PointF[] p = new PointF[21];
             for (int i = 0; i < 21; i++) {
-                p[i] = toBuffer(frame, flat[i * 2], flat[i * 2 + 1]);
+                p[i] = toBuffer(frame, raw, flat[i * 2], flat[i * 2 + 1]);
             }
 
             int lineColor = hand == 0 ? 0xFF59E9FF : 0xFFFF63D8;
@@ -396,48 +381,43 @@ final class PortalRenderer {
     }
 
     /**
-     * Converts a normalized coordinate in MediaPipe's ROTATED/DISPLAY-oriented image space back
-     * into the OverlayEffect canvas' PRE-ROTATION full-buffer space.
-     *
-     * Important: the normalized landmark belongs to the full analysis image. cropRect is only the
-     * region CameraX later exposes after crop. Mapping 0..1 into cropRect (the old implementation)
-     * shrinks/translates every landmark and is why the debug skeleton did not sit on the hand.
+     * Exact cross-use-case mapping:
+     * MediaPipe rotated/display normalized -> undo app mirror -> undo MediaPipe rotation ->
+     * ImageAnalysis buffer pixels -> camera sensor -> OverlayEffect buffer pixels.
      */
-    private static PointF toBuffer(Frame frame, float displayX, float displayY) {
+    private static PointF toBuffer(Frame frame, PortalState raw, float displayX, float displayY) {
         float x = displayX;
         float y = displayY;
+        if (raw.sourceMirrored) x = 1f - x;
 
-        // PortalGeometry stores front-camera points in final mirrored/display orientation. Undo
-        // that mirror first; CameraX will apply the real output mirror again after rotation.
-        if (frame.isMirroring()) x = 1f - x;
-
-        float bx;
-        float by;
-        switch (frame.getRotationDegrees()) {
+        float ax;
+        float ay;
+        switch (raw.analysisRotationDegrees) {
             case 90:
-                // Inverse of clockwise 90°: display(x,y) = (1-bufferY, bufferX)
-                bx = y;
-                by = 1f - x;
+                ax = y;
+                ay = 1f - x;
                 break;
             case 180:
-                bx = 1f - x;
-                by = 1f - y;
+                ax = 1f - x;
+                ay = 1f - y;
                 break;
             case 270:
-                bx = 1f - y;
-                by = x;
+                ax = 1f - y;
+                ay = x;
                 break;
             default:
-                bx = x;
-                by = y;
+                ax = x;
+                ay = y;
                 break;
         }
 
-        bx = clamp01(bx);
-        by = clamp01(by);
-        return new PointF(
-                bx * frame.getSize().getWidth(),
-                by * frame.getSize().getHeight());
+        float[] point = new float[] {
+                ax * raw.analysisWidth,
+                ay * raw.analysisHeight
+        };
+        raw.analysisToSensor.mapPoints(point);
+        frame.getSensorToBufferTransform().mapPoints(point);
+        return new PointF(point[0], point[1]);
     }
 
     private static float[] validSkeleton(float[] in) {
@@ -453,10 +433,6 @@ final class PortalRenderer {
         if (s == null || s.anchors == null) return false;
         for (int i : s.anchors) if (i == nodeIndex) return true;
         return false;
-    }
-
-    private static float clamp01(float v) {
-        return Math.max(0f, Math.min(1f, v));
     }
 
     private static int withAlpha(int color, float alpha) {
