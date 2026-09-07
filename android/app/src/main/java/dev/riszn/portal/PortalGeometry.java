@@ -14,20 +14,22 @@ final class PortalGeometry {
     private static final int[] FINGER_DIPS = {7, 11, 15, 19};
     private static final int[] FINGER_PIPS = {6, 10, 14, 18};
 
+    // Pinch is normalized by hand size so summon sensitivity survives distance changes.
     private static final float PINCH_ON = 0.34f;
     private static final float PINCH_OFF = 0.50f;
     private static final int TRIGGER_HOLD_FRAMES = 2;
+
+    // Grabs are latched. Once a fingertip owns a handle, we follow the same finger slot instead of
+    // choosing a new nearest fingertip every frame. That prevents the portal from jumping fingers.
     private static final int GRAB_HOLD_FRAMES = 2;
     private static final int GRAB_MISS_FRAMES = 3;
+    private static final int GRAB_COOLDOWN_AFTER_SUMMON = 4;
     private static final long NO_HAND_CLOSE_NS = 1_050_000_000L;
 
+    // Portal is a true four-corner membrane, not an ellipse. Order is clockwise:
+    // 0 = top-left, 1 = top-right, 2 = bottom-right, 3 = bottom-left in its local seed frame.
+    private Vec[] corners = null;
     private boolean active = false;
-    private Vec center = new Vec(0.5f, 0.5f);
-    private Vec axisU = new Vec(1f, 0f);
-    private Vec axisV = new Vec(0f, 1f);
-    private float halfWidth = 0.025f;
-    private float halfHeight = 0.025f;
-    private float seedHalf = 0.025f;
 
     private int triggerVotes = 0;
     private int triggerFingerSlot = -1;
@@ -35,12 +37,13 @@ final class PortalGeometry {
 
     private Grab grab = null;
     private int pendingHandle = -1;
+    private int pendingFingerSlot = -1;
     private int pendingVotes = 0;
     private Vec pendingTip = null;
+    private int grabCooldownFrames = 0;
     private long lastHandSeenNs = 0L;
 
-    // Metadata of the latest ImageAnalysis frame. Geometry stays in MediaPipe's rotated/display
-    // normalized space, but renderer needs this exact transform to place it on Preview/Video.
+    // Metadata for exact CameraX ImageAnalysis -> sensor -> OverlayEffect mapping.
     private Matrix analysisToSensor = new Matrix();
     private int analysisWidth = 1;
     private int analysisHeight = 1;
@@ -49,10 +52,12 @@ final class PortalGeometry {
 
     synchronized void reset() {
         active = false;
+        corners = null;
         triggerVotes = 0;
         triggerFingerSlot = -1;
         triggerLastCenter = null;
         grab = null;
+        grabCooldownFrames = 0;
         clearPendingGrab();
     }
 
@@ -167,19 +172,31 @@ final class PortalGeometry {
     }
 
     private void summon(Pinch pinch) {
-        float diameter = Math.min(pinch.segmentLength * 0.88f, pinch.handScale * 0.22f);
-        diameter = clamp(diameter, 0.018f, 0.060f);
+        // The seed is deliberately smaller than one visible finger segment in BOTH dimensions.
+        // It starts as a tiny filter panel like the reference, never as a palm-sized ellipse.
+        float maxDimension = Math.min(pinch.segmentLength * 0.88f, pinch.handScale * 0.22f);
+        maxDimension = clamp(maxDimension, 0.018f, 0.058f);
+        float width = maxDimension;
+        float height = maxDimension * 0.58f;
 
-        center = pinch.center;
-        axisU = pinch.fingerAxis;
-        if (length(axisU) < 1e-5f) axisU = new Vec(1f, 0f);
-        axisV = perpendicular(axisU);
-        halfWidth = diameter * 0.5f;
-        halfHeight = diameter * 0.5f;
-        seedHalf = diameter * 0.5f;
+        Vec u = pinch.fingerAxis;
+        if (length(u) < 1e-5f) u = new Vec(1f, 0f);
+        u = normalize(u);
+        Vec v = perpendicular(u);
+        float hw = width * 0.5f;
+        float hh = height * 0.5f;
+        Vec c = pinch.center;
+
+        corners = new Vec[] {
+                add(c, add(mul(u, -hw), mul(v, -hh))),
+                add(c, add(mul(u,  hw), mul(v, -hh))),
+                add(c, add(mul(u,  hw), mul(v,  hh))),
+                add(c, add(mul(u, -hw), mul(v,  hh)))
+        };
 
         active = true;
         grab = null;
+        grabCooldownFrames = GRAB_COOLDOWN_AFTER_SUMMON;
         clearPendingGrab();
         triggerVotes = 0;
         triggerFingerSlot = -1;
@@ -187,14 +204,25 @@ final class PortalGeometry {
     }
 
     private void updateStretch(List<List<NormalizedLandmark>> hands, int detected, boolean mirrorX) {
+        if (corners == null || corners.length != 4) return;
+
         List<FingerPoint> candidates = dragCandidates(hands, detected, mirrorX);
 
+        if (grabCooldownFrames > 0) {
+            grabCooldownFrames--;
+            grab = null;
+            clearPendingGrab();
+            return;
+        }
+
         if (grab != null) {
-            FingerPoint nearest = nearestFinger(candidates, grab.tip, 0.19f);
-            if (nearest != null) {
-                grab.tip = nearest.point;
+            FingerPoint match = matchingFinger(candidates, grab.fingerSlot, grab.tip, 0.17f);
+            if (match != null) {
+                Vec bounded = limitStep(grab.tip, match.point, 0.085f);
+                Vec previous = grab.tip;
+                grab.tip = bounded;
                 grab.misses = 0;
-                applyHandleDrag(grab.handle, nearest.point);
+                applyHandleDrag(grab.handle, previous, bounded);
             } else {
                 grab.misses++;
                 if (grab.misses >= GRAB_MISS_FRAMES) grab = null;
@@ -208,17 +236,19 @@ final class PortalGeometry {
             return;
         }
 
-        boolean samePending = pendingHandle == hit.handle && pendingTip != null &&
-                dist(pendingTip, hit.point) < 0.09f;
+        boolean samePending = pendingHandle == hit.handle &&
+                pendingFingerSlot == hit.fingerSlot &&
+                pendingTip != null && dist(pendingTip, hit.point) < 0.08f;
         if (samePending) pendingVotes++;
         else {
             pendingHandle = hit.handle;
+            pendingFingerSlot = hit.fingerSlot;
             pendingVotes = 1;
         }
         pendingTip = hit.point;
 
         if (pendingVotes >= GRAB_HOLD_FRAMES) {
-            grab = new Grab(hit.handle, hit.point);
+            grab = new Grab(hit.handle, hit.fingerSlot, hit.point);
             clearPendingGrab();
         }
     }
@@ -236,8 +266,9 @@ final class PortalGeometry {
             for (int slot = 0; slot < FINGER_TIPS.length; slot++) {
                 Vec tip = p(h, FINGER_TIPS[slot], mirrorX);
                 float pinchRatio = dist(thumb, tip) / Math.max(scale, 1e-5f);
+                // A fingertip still touching the thumb belongs to the trigger gesture, not resize.
                 if (pinchRatio < PINCH_OFF) continue;
-                out.add(new FingerPoint(tip));
+                out.add(new FingerPoint(slot, tip));
             }
         }
         return out;
@@ -246,24 +277,28 @@ final class PortalGeometry {
     private HandleHit nearestHandleHit(List<FingerPoint> candidates) {
         if (candidates == null || candidates.isEmpty()) return null;
         Vec[] handles = handles();
-        float captureRadius = clamp(Math.min(halfWidth, halfHeight) * 0.72f + 0.031f, 0.040f, 0.078f);
+        float minEdge = Math.min(
+                Math.min(dist(corners[0], corners[1]), dist(corners[1], corners[2])),
+                Math.min(dist(corners[2], corners[3]), dist(corners[3], corners[0])));
+        float captureRadius = clamp(minEdge * 0.62f + 0.020f, 0.034f, 0.075f);
 
         HandleHit best = null;
         for (FingerPoint finger : candidates) {
             for (int handle = 0; handle < handles.length; handle++) {
                 float d = dist(finger.point, handles[handle]);
                 if (d <= captureRadius && (best == null || d < best.distance)) {
-                    best = new HandleHit(handle, finger.point, d);
+                    best = new HandleHit(handle, finger.slot, finger.point, d);
                 }
             }
         }
         return best;
     }
 
-    private FingerPoint nearestFinger(List<FingerPoint> candidates, Vec previous, float maxDistance) {
+    private FingerPoint matchingFinger(List<FingerPoint> candidates, int fingerSlot, Vec previous, float maxDistance) {
         FingerPoint best = null;
         float bestDistance = Float.MAX_VALUE;
         for (FingerPoint p : candidates) {
+            if (p.slot != fingerSlot) continue;
             float d = dist(previous, p.point);
             if (d < bestDistance && d <= maxDistance) {
                 best = p;
@@ -273,51 +308,38 @@ final class PortalGeometry {
         return best;
     }
 
-    private void applyHandleDrag(int handle, Vec fingertip) {
-        Vec[] h = handles();
-        float minHalf = Math.max(seedHalf * 0.65f, 0.009f);
-        float maxHalf = 0.43f;
+    /**
+     * Handles 0..3 are the four REAL portal corners.
+     * Handles 4..7 are edge midpoints: top, right, bottom, left.
+     * Corner drag gives the reference-style free quadrilateral deformation. Edge drag translates
+     * both adjacent corners together, so users can deliberately widen or lengthen the panel.
+     */
+    private void applyHandleDrag(int handle, Vec previousTip, Vec fingertip) {
+        Vec[] candidate = cloneCorners(corners);
 
-        if (handle == 0 || handle == 2) {
-            Vec fixed = h[handle == 0 ? 2 : 0];
-            Vec delta = handle == 0 ? sub(fingertip, fixed) : sub(fixed, fingertip);
-            float span = length(delta);
-            if (span < minHalf * 2f) return;
-
-            Vec newU = normalize(delta);
-            Vec newV = perpendicular(newU);
-            if (dot(newV, axisV) < 0f) newV = mul(newV, -1f);
-
-            center = mul(add(fixed, fingertip), 0.5f);
-            halfWidth = clamp(span * 0.5f, minHalf, maxHalf);
-            axisU = newU;
-            axisV = newV;
+        if (handle >= 0 && handle < 4) {
+            candidate[handle] = clampPoint(fingertip);
+        } else if (handle >= 4 && handle < 8) {
+            int edge = handle - 4;
+            int a = edge;
+            int b = (edge + 1) % 4;
+            Vec delta = sub(fingertip, previousTip);
+            candidate[a] = clampPoint(add(candidate[a], delta));
+            candidate[b] = clampPoint(add(candidate[b], delta));
         } else {
-            Vec fixed = h[handle == 1 ? 3 : 1];
-            Vec delta = handle == 1 ? sub(fingertip, fixed) : sub(fixed, fingertip);
-            float span = length(delta);
-            if (span < minHalf * 2f) return;
-
-            Vec newV = normalize(delta);
-            Vec newU = new Vec(newV.y, -newV.x);
-            if (dot(newU, axisU) < 0f) newU = mul(newU, -1f);
-
-            center = mul(add(fixed, fingertip), 0.5f);
-            halfHeight = clamp(span * 0.5f, minHalf, maxHalf);
-            axisV = newV;
-            axisU = newU;
+            return;
         }
 
-        center = new Vec(clamp(center.x, -0.20f, 1.20f), clamp(center.y, -0.20f, 1.20f));
+        if (validQuad(candidate)) corners = candidate;
     }
 
     private PortalState buildActiveState(int detected, float[][] skeletons, String[] handedness) {
-        Vec[] nodes = ellipseNodes(16);
+        if (corners == null || corners.length != 4) return invalidState(detected, skeletons, handedness);
         PortalState.Mode mode = detected >= 2 ? PortalState.Mode.TWO_HAND : PortalState.Mode.ONE_HAND;
         return new PortalState(
                 mode,
-                flatten(nodes),
-                new int[] {0, 4, 8, 12},
+                flatten(corners),
+                new int[] {0, 1, 2, 3},
                 skeletons,
                 handedness,
                 System.nanoTime(),
@@ -329,31 +351,46 @@ final class PortalGeometry {
                 sourceMirrored);
     }
 
-    private Vec[] ellipseNodes(int count) {
-        Vec[] out = new Vec[count];
-        for (int i = 0; i < count; i++) {
-            double angle = Math.PI * 2.0 * i / count;
-            float c = (float) Math.cos(angle);
-            float s = (float) Math.sin(angle);
-            float ripple = 1f + 0.018f * (float) Math.sin(angle * 3.0);
-            out[i] = add(center,
-                    add(mul(axisU, halfWidth * c * ripple),
-                            mul(axisV, halfHeight * s * ripple)));
-        }
-        return out;
-    }
-
+    // Four corners + four edge midpoints. Edge handles are virtual; only the four corners are drawn.
     private Vec[] handles() {
         return new Vec[] {
-                add(center, mul(axisU, halfWidth)),
-                add(center, mul(axisV, halfHeight)),
-                add(center, mul(axisU, -halfWidth)),
-                add(center, mul(axisV, -halfHeight))
+                corners[0], corners[1], corners[2], corners[3],
+                midpoint(corners[0], corners[1]),
+                midpoint(corners[1], corners[2]),
+                midpoint(corners[2], corners[3]),
+                midpoint(corners[3], corners[0])
         };
+    }
+
+    private boolean validQuad(Vec[] q) {
+        if (q == null || q.length != 4) return false;
+        float minEdge = 0.008f;
+        for (int i = 0; i < 4; i++) {
+            if (dist(q[i], q[(i + 1) % 4]) < minEdge) return false;
+        }
+
+        float signed = signedArea(q);
+        if (Math.abs(signed) < 0.00012f) return false;
+
+        // Keep the membrane convex. Crossing corners is the main cause of exploding/self-folding
+        // portal shapes, so an invalid drag frame is ignored instead of poisoning the state.
+        float expectedSign = 0f;
+        for (int i = 0; i < 4; i++) {
+            Vec a = q[i];
+            Vec b = q[(i + 1) % 4];
+            Vec c = q[(i + 2) % 4];
+            float cross = cross(sub(b, a), sub(c, b));
+            if (Math.abs(cross) < 1e-6f) continue;
+            float sign = Math.signum(cross);
+            if (expectedSign == 0f) expectedSign = sign;
+            else if (sign != expectedSign) return false;
+        }
+        return true;
     }
 
     private void clearPendingGrab() {
         pendingHandle = -1;
+        pendingFingerSlot = -1;
         pendingVotes = 0;
         pendingTip = null;
     }
@@ -394,6 +431,12 @@ final class PortalGeometry {
         return new Vec(x, l.y());
     }
 
+    private static Vec[] cloneCorners(Vec[] source) {
+        Vec[] out = new Vec[source.length];
+        for (int i = 0; i < source.length; i++) out[i] = new Vec(source[i].x, source[i].y);
+        return out;
+    }
+
     private static float[] flatten(Vec[] nodes) {
         float[] out = new float[nodes.length * 2];
         for (int i = 0; i < nodes.length; i++) {
@@ -403,10 +446,11 @@ final class PortalGeometry {
         return out;
     }
 
+    private static Vec midpoint(Vec a, Vec b) { return mul(add(a, b), 0.5f); }
     private static Vec add(Vec a, Vec b) { return new Vec(a.x + b.x, a.y + b.y); }
     private static Vec sub(Vec a, Vec b) { return new Vec(a.x - b.x, a.y - b.y); }
     private static Vec mul(Vec a, float s) { return new Vec(a.x * s, a.y * s); }
-    private static float dot(Vec a, Vec b) { return a.x * b.x + a.y * b.y; }
+    private static float cross(Vec a, Vec b) { return a.x * b.y - a.y * b.x; }
     private static float dist(Vec a, Vec b) { return length(sub(a, b)); }
     private static float length(Vec a) { return (float) Math.hypot(a.x, a.y); }
     private static Vec normalize(Vec a) {
@@ -415,6 +459,24 @@ final class PortalGeometry {
     }
     private static Vec perpendicular(Vec a) { return new Vec(-a.y, a.x); }
     private static float clamp(float v, float lo, float hi) { return Math.max(lo, Math.min(hi, v)); }
+    private static Vec clampPoint(Vec p) {
+        return new Vec(clamp(p.x, -0.18f, 1.18f), clamp(p.y, -0.18f, 1.18f));
+    }
+    private static Vec limitStep(Vec from, Vec to, float maxDistance) {
+        Vec delta = sub(to, from);
+        float d = length(delta);
+        if (d <= maxDistance || d < 1e-6f) return to;
+        return add(from, mul(delta, maxDistance / d));
+    }
+    private static float signedArea(Vec[] q) {
+        float a = 0f;
+        for (int i = 0; i < q.length; i++) {
+            Vec p0 = q[i];
+            Vec p1 = q[(i + 1) % q.length];
+            a += p0.x * p1.y - p1.x * p0.y;
+        }
+        return a * 0.5f;
+    }
 
     private static int normalizeRotation(int degrees) {
         int d = ((degrees % 360) + 360) % 360;
@@ -450,16 +512,22 @@ final class PortalGeometry {
     }
 
     private static final class FingerPoint {
+        final int slot;
         final Vec point;
-        FingerPoint(Vec point) { this.point = point; }
+        FingerPoint(int slot, Vec point) {
+            this.slot = slot;
+            this.point = point;
+        }
     }
 
     private static final class HandleHit {
         final int handle;
+        final int fingerSlot;
         final Vec point;
         final float distance;
-        HandleHit(int handle, Vec point, float distance) {
+        HandleHit(int handle, int fingerSlot, Vec point, float distance) {
             this.handle = handle;
+            this.fingerSlot = fingerSlot;
             this.point = point;
             this.distance = distance;
         }
@@ -467,10 +535,12 @@ final class PortalGeometry {
 
     private static final class Grab {
         final int handle;
+        final int fingerSlot;
         Vec tip;
         int misses = 0;
-        Grab(int handle, Vec tip) {
+        Grab(int handle, int fingerSlot, Vec tip) {
             this.handle = handle;
+            this.fingerSlot = fingerSlot;
             this.tip = tip;
         }
     }
