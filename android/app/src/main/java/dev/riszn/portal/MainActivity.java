@@ -19,7 +19,6 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.camera.core.CameraEffect;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.MirrorMode;
@@ -70,7 +69,7 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
         buildUi();
 
         portalRenderer = new PortalRenderer(portalState);
-        setupOverlayEffect();
+        setupCameraEffect();
 
         handTracker = new HandTracker(this, portalState, this);
         handTracker.setFrontCamera(frontCamera);
@@ -150,7 +149,7 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
         setContentView(root);
     }
 
-    private void setupOverlayEffect() {
+    private void setupCameraEffect() {
         portalEffect = new PortalEffect(portalRenderer,
                 error -> runOnUiThread(() -> {
                     setStatus("FILTER ERROR", 0xFFFF6B78);

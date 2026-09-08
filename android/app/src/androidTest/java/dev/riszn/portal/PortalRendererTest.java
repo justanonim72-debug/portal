@@ -1,6 +1,7 @@
 package dev.riszn.portal;
 
 import android.graphics.Canvas;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
@@ -33,14 +34,26 @@ public class PortalRendererTest {
             Canvas c=input.lockCanvas(null);c.drawColor(Color.WHITE);input.unlockCanvasAndPost(c);
             st.updateTexImage();float[] transform=new float[16];st.getTransformMatrix(transform);
             renderer.initialize();
-            Matrix analysisToSensor=new Matrix();analysisToSensor.setScale(2,2);
+            Matrix analysisToSensor=new Matrix();analysisToSensor.setScale(4,4);
             Matrix sensorToOutput=new Matrix();sensorToOutput.setScale(.5f,.5f);
             // A horizontal plane in a portrait buffer, off-center to detect Y flips/rotation errors.
-            float[] q={20,30,110,30,105,80,25,80};
+            float[] q={5,15,45,15,42.5f,40,7.5f,40};
             state.set(new PortalState(PortalInteraction.Phase.ACTIVE,q,new float[0][],new int[0],new int[0],0,
                     System.nanoTime(),System.nanoTime(),analysisToSensor,128,256));
             renderer.draw(tex[0],transform,sensorToOutput,128,256);GLES20.glFinish();
-            assertPixel(64,55,true);assertPixel(64,180,false);assertPixel(10,55,false);
+            assertPixel(20,55,true);assertPixel(70,55,true);assertPixel(64,180,false);assertPixel(100,55,false);
+            // CameraX front-camera output can reflect winding. The same sensor point must follow.
+            sensorToOutput.setScale(-.5f,.5f);sensorToOutput.postTranslate(128,0);
+            renderer.draw(tex[0],transform,sensorToOutput,128,256);GLES20.glFinish();
+            assertPixel(108,55,true);assertPixel(20,55,false);
+            ByteBuffer pixels=ByteBuffer.allocateDirect(128*256*4);
+            GLES20.glReadPixels(0,0,128,256,GLES20.GL_RGBA,GLES20.GL_UNSIGNED_BYTE,pixels);
+            Bitmap evidence=Bitmap.createBitmap(128,256,Bitmap.Config.ARGB_8888);
+            for(int y=0;y<256;y++)for(int x=0;x<128;x++) {
+                int at=((255-y)*128+x)*4;
+                evidence.setPixel(x,y,Color.rgb(pixels.get(at)&255,pixels.get(at+1)&255,pixels.get(at+2)&255));
+            }
+            TestEvidence.save(evidence,"portrait-horizontal-plane");evidence.recycle();
             state.set(PortalState.none());renderer.draw(tex[0],transform,sensorToOutput,128,256);GLES20.glFinish();
             assertPixel(64,55,false);
             assertEquals(GLES20.GL_NO_ERROR,GLES20.glGetError());

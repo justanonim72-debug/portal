@@ -119,8 +119,7 @@ public class PortalRecordingTest {
                 assertTrue("Recorded frame lacks violet filter: "+Integer.toHexString(pixel),
                         Color.green(pixel)<55 && Color.blue(pixel)>Color.green(pixel)+10);
             }
-            java.io.File evidence=new java.io.File(activity.get().getExternalFilesDir(null),"recorded-"+name+".png");
-            try(var stream=new java.io.FileOutputStream(evidence)){frame.compress(Bitmap.CompressFormat.PNG,100,stream);}
+            TestEvidence.save(frame,"recorded-"+name);
             frame.recycle();
         } finally {activity.get().getContentResolver().delete(uri,null,null);}
     }

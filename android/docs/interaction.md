@@ -66,8 +66,17 @@ Normal UI shows tiny corner markers and highlights owned handles. Debug adds a s
 
 CI also runs `:app:connectedDebugAndroidTest` on an API 35 emulator:
 
-- Real GLES camera-texture pixel checks verify a horizontal quadrilateral in a portrait buffer, inside/outside color filtering, sensor transform composition and reset.
+- Real GLES camera-texture pixel checks verify a horizontal quadrilateral in a portrait buffer, inside/outside color filtering, nontrivial sensor transform composition, front-camera reflection and reset.
+- A real MediaPipe CPU test detects the official hand image upright and rotated sideways, confirming that rotation options return landmarks in the original input buffer.
 - A real CameraX preview/Recorder test records front and back cameras around a lifecycle unbind/rebind, decodes the resulting MP4 frames and checks that the GPU violet filter is present. It supplies deterministic panel geometry; it does not claim to validate real hand detection from emulator camera imagery.
 - APK signature/alignment checks and install via instrumentation verify an installable artifact. Reports and decoded recording PNGs are uploaded with CI.
 
 Physical-device checks still needed: skeleton alignment on a real portrait hand, all four trigger fingers at near/far distances, deliberate same-hand/two-hand grabs (including horizontal holds), low light/occlusion and crossing hands, front/back preview-to-gallery alignment, and GPU/CPU tracking/latency while recording. Two visually indistinguishable overlapping hands with ambiguous handedness remain a tracking ambiguity; no temporal matcher can guarantee identity through a complete long occlusion. Device-only acceptance must not be inferred from the synthetic tests.
+
+## Recording error 8 investigation
+
+The first emulator test failed with `ERROR_NO_VALID_DATA` on the **first front-camera recording**, before any lifecycle transition. The test had stopped recording 1.8 seconds after `VideoRecordEvent.Start`. CameraX emits Start when starting the encoder, before receiving a video keyframe.
+
+[Diagnostic run 34248663032](https://github.com/justanonim72-debug/portal/actions/runs/34248663032) retained the production CameraX/GL pipeline and all media/pixel assertions. Its logs show the emulator's `c2.android.avc.encoder` started at 16:07:12.927 UTC, received the first video keyframe at 16:07:14.982 (2.055 seconds later), and delivered the first recorded-data status at 16:07:17.005. The original fixed stop could therefore precede valid video. No effect exception occurred. Filtered front and back videos finalized without error and decoded correctly across background/resume/camera switch. A plain CameraX control recording also passed.
+
+The test now waits, with a bounded timeout, for **at least 1.5 seconds of encoded video and nonzero recorded bytes**, then checks successful finalization, decoded duration and filtered pixels. This strengthens the media contract instead of relying on emulator wall-clock startup speed. This failure was test synchronization under software-emulator encoder startup, not evidence of an app lifecycle bug. It does not establish physical-device latency. Logcat, codec diagnostics, test reports and decoded PNGs are preserved on CI.
