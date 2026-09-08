@@ -40,6 +40,7 @@ public class PortalRecordingTest {
             awaitPreview(scenario);
             recordAndVerify(scenario,"front",true);
             scenario.moveToState(Lifecycle.State.CREATED);
+            awaitPreviewState(scenario,PreviewView.StreamState.IDLE);
             scenario.moveToState(Lifecycle.State.RESUMED);
             awaitPreview(scenario);
             recordAndVerify(scenario,"front-resumed",true);
@@ -56,14 +57,17 @@ public class PortalRecordingTest {
         }
     }
     private void awaitPreview(ActivityScenario<MainActivity> scenario) {
+        awaitPreviewState(scenario,PreviewView.StreamState.STREAMING);
+    }
+    private void awaitPreviewState(ActivityScenario<MainActivity> scenario,PreviewView.StreamState expected) {
         AtomicReference<PreviewView.StreamState> state=new AtomicReference<>();
         long deadline=SystemClock.elapsedRealtime()+20_000;
         do {
             scenario.onActivity(a -> state.set(((PreviewView)field(a,"previewView")).getPreviewStreamState().getValue()));
-            if(state.get()==PreviewView.StreamState.STREAMING)return;
+            if(state.get()==expected)return;
             SystemClock.sleep(100);
         } while(SystemClock.elapsedRealtime()<deadline);
-        fail("Preview never streamed: "+state.get());
+        fail("Preview did not reach "+expected+": "+state.get());
     }
     @SuppressWarnings("unchecked")
     private void recordAndVerify(ActivityScenario<MainActivity> scenario,String name,boolean filtered) throws Exception {
