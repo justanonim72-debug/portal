@@ -65,9 +65,10 @@ final class PortalRenderer {
     private static final String LINES_VERTEX = """
         attribute vec2 aPosition;
         uniform vec2 uSize;
+        uniform float uPointSize;
         void main() {
           gl_Position = vec4(aPosition.x/uSize.x*2.0-1.0,1.0-aPosition.y/uSize.y*2.0,0.0,1.0);
-          gl_PointSize = 6.0;
+          gl_PointSize = uPointSize;
         }
         """;
     private static final String LINES_FRAGMENT = "precision mediump float; uniform vec3 uColor; void main(){gl_FragColor=vec4(uColor,1.0);}";
@@ -81,7 +82,7 @@ final class PortalRenderer {
     private volatile double responseMs;
     private long measuredState;
     private int program, lineProgram, position, textureMatrix, camera, size, quad, visible, styleUniform;
-    private int linePosition, lineSize, lineColor;
+    private int linePosition, lineSize, lineColor, pointSize;
 
     PortalRenderer(AtomicReference<PortalState> stateRef) { this.stateRef = stateRef; }
     String nextStyle() { style = (style+1)%STYLES.length; return STYLES[style]; }
@@ -95,6 +96,7 @@ final class PortalRenderer {
         visible = uniform(program,"uVisible"); styleUniform = uniform(program,"uStyle");
         linePosition = GLES20.glGetAttribLocation(lineProgram,"aPosition");
         lineSize = uniform(lineProgram,"uSize"); lineColor = uniform(lineProgram,"uColor");
+        pointSize = uniform(lineProgram,"uPointSize");
     }
 
     void draw(int texture, float[] transform, Matrix sensorToOutput, int width, int height) {
@@ -119,9 +121,25 @@ final class PortalRenderer {
         GLES20.glVertexAttribPointer(position,2,GLES20.GL_FLOAT,false,0,screen);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4);
         GLES20.glDisableVertexAttribArray(position);
+        if (state.visible()) {
+            GLES20.glUseProgram(lineProgram); GLES20.glUniform2f(lineSize,width,height);
+            GLES20.glUniform3f(lineColor,.88f,.85f,.95f); GLES20.glUniform1f(pointSize,3f);
+            GLES20.glEnableVertexAttribArray(linePosition);
+            lines.clear(); lines.put(corners); lines.flip();
+            GLES20.glVertexAttribPointer(linePosition,2,GLES20.GL_FLOAT,false,0,lines);
+            GLES20.glDrawArrays(GLES20.GL_POINTS,0,4);
+            GLES20.glUniform3f(lineColor,.5f,1f,.8f); GLES20.glUniform1f(pointSize,5f);
+            for (int handle : state.grabbedHandles) {
+                int a = handle < 4 ? handle : handle-4, b = handle < 4 ? a : (a+1)%4;
+                lines.clear(); lines.put((corners[a*2]+corners[b*2])*.5f).put((corners[a*2+1]+corners[b*2+1])*.5f); lines.flip();
+                GLES20.glVertexAttribPointer(linePosition,2,GLES20.GL_FLOAT,false,0,lines);
+                GLES20.glDrawArrays(GLES20.GL_POINTS,0,1);
+            }
+            GLES20.glDisableVertexAttribArray(linePosition);
+        }
         // Geometry is already filtered and constrained. Renderer must not smooth/reshape it again.
         if (debug && now-state.producedAtNanos < 200_000_000L) {
-            GLES20.glUseProgram(lineProgram); GLES20.glUniform2f(lineSize,width,height);
+            GLES20.glUseProgram(lineProgram); GLES20.glUniform1f(pointSize,6f); GLES20.glUniform2f(lineSize,width,height);
             GLES20.glEnableVertexAttribArray(linePosition);
             for (int h = 0; h < state.skeletons.length; h++) {
                 analysisToOutput.mapPoints(mapped,state.skeletons[h]);

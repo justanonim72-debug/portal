@@ -1,33 +1,19 @@
-# Portal Android Native
+# Portal native Android
 
-Native Android version of Portal. This is now the primary runtime path; the GitHub Pages PWA remains a web demo.
+CameraX camera + MediaPipe Hand Landmarker (GPU preferred, CPU fallback) with a persistent four-corner **live camera filter plane**. Both preview and MP4 recording use the same GPU effect.
 
-## Runtime design
+1. Pinch your thumb to index, middle, ring or pinky for a moment to create a small panel.
+2. Release the pinch. Touch a corner or any edge with an extended fingertip, pause briefly, then drag. Multiple fingertips/hands can grab distinct corners or opposite edges.
+3. Fold/pinch the controlling finger to release. The panel remains until `×` reset or camera switch.
+4. Cycle Violet / Invert / Mono / Thermal / Clear, toggle the debug hand skeleton, switch front/back camera, or record a silent MP4 to `Movies/Portal`.
 
-- CameraX 1.6.2 for preview, image analysis and video capture.
-- MediaPipe Hand Landmarker 0.10.35.
-- GPU delegate is attempted first on a dedicated MediaPipe thread; CPU is fallback only.
-- `ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST` prevents inference backlog.
-- Thumb tip (landmark 4) + index tip (landmark 8) are the hard anchors for one-hand control.
-- Other fingers can only bend the far membrane slightly; they do not move the anchor edge.
-- CameraX `OverlayEffect` renders the membrane through the camera OpenGL pipeline and targets both Preview + VideoCapture, so recorded MP4 includes the portal overlay.
+Use [Build Portal Android APK](../.github/workflows/build-portal-android.yml) for a tested installable APK. It runs JVM tests, lint, Android emulator shader/recording checks, signature verification and APK alignment checks. The official MediaPipe model is fetched during CI.
 
-## Build from GitHub Actions
+For local builds use Java 17, Gradle 8.11.1, Android platform 36, and place the [official model](https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task) at `app/src/main/assets/hand_landmarker.task`:
 
-Run **Build Portal Android APK** or push a change under `android/`.
+```sh
+gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+gradle :app:connectedDebugAndroidTest
+```
 
-Artifact:
-
-- `Portal-Android-GPU`
-- `Portal-native-GPU-debug.apk`
-
-The workflow downloads the official MediaPipe `hand_landmarker.task` model during CI, so the public source repo does not need to store the binary model.
-
-## Device gate
-
-The UI shows the actual MediaPipe backend after initialization:
-
-- `TRACKING · GPU` = desired path.
-- `TRACKING · CPU fallback` = GPU delegate failed on that runtime and must be investigated before performance tuning.
-
-The top-right HUD reports average inference latency and detector updates/second separately from camera rendering.
+See [interaction architecture and verification](docs/interaction.md) for root causes, the exact state machine, coordinate/identity/filter contracts, performance measurements and remaining physical-device validation.

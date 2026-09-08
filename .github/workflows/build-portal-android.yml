@@ -83,9 +83,8 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front emulated
           script: |
-            cd android
-            gradle --no-daemon :app:connectedDebugAndroidTest --stacktrace
-            adb pull /sdcard/Android/data/dev.riszn.portal/files/ app/build/recording-evidence/
+            gradle -p android --no-daemon :app:connectedDebugAndroidTest --stacktrace
+            adb pull /sdcard/Android/data/dev.riszn.portal/files/ android/app/build/recording-evidence/
 
       - name: Verify APK
         shell: bash

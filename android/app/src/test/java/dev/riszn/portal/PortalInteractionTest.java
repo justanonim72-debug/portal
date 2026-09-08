@@ -66,6 +66,28 @@ public class PortalInteractionTest {
             settle(p); assertArrayEquals(q,panel.corners(),0f);
         }
     }
+    @Test public void triggerIsScaleAndTrackingRateIndependent() {
+        for(float scale : new float[]{.25f,.5f,1f,2f}) for(long interval : new long[]{16_000_000L,50_000_000L,100_000_000L}) {
+            panel.reset(); tracks.reset();
+            float[] p=hand(0);tip(p,12,310,300);p[8]=312;p[9]=300;
+            for(int n=0;n<p.length;n++)p[n]*=scale;
+            long start=now+interval;
+            while(panel.corners().length==0 && now-start<300_000_000L) {
+                now+=interval;
+                panel.update(tracks.update(List.of(observation(p,"Left")),now),now);
+            }
+            assertEquals(PortalInteraction.Phase.SEEDED,panel.phase());
+            assertTrue(now-start>=PortalInteraction.TRIGGER_NS);
+            assertTrue(now-start<PortalInteraction.TRIGGER_NS+interval);
+        }
+    }
+    @Test public void longDropoutReleasesOnlyGripAndRequiresFreshContact() {
+        float[] p=activate(),q=panel.corners();tip(p,16,q[0],q[1]);settle(p);
+        q=panel.corners();
+        for(int i=0;i<8;i++)tick();
+        assertEquals(0,panel.grips().size());assertEquals(PortalInteraction.Phase.ACTIVE,panel.phase());
+        assertArrayEquals(q,panel.corners(),.01f);
+    }
     @Test public void shortPinchAndFingerChangesDoNotTrigger() {
         float[] p=hand(0); p[8]=p[16]; p[9]=p[17]; tick(p); tick(hand(0));
         assertEquals(PortalInteraction.Phase.IDLE,panel.phase());
@@ -120,6 +142,7 @@ public class PortalInteractionTest {
         tip(b,12,q[4]+40,q[5]+30); tick(p,b); // returning finger rebases, no unseen jump
         assertArrayEquals(before,panel.corners(),.01f);
         settle(p,b); assertEquals(second,panel.grips().get(1).handId);
+        assertArrayEquals("Filter catch-up must not apply travel during dropout",before,panel.corners(),.01f);
     }
     @Test public void pinchReleasesGripAndDoesNotSummonAgain() {
         float[] p=activate(),q=panel.corners(); tip(p,16,q[0],q[1]); settle(p);

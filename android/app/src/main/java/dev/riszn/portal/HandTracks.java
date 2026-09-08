@@ -53,21 +53,18 @@ final class HandTracks {
             }
         }
         List<Hand> result = new ArrayList<>(2);
+        List<Track> observed = new ArrayList<>(2);
         for (int i = 0; i < valid.size(); i++) {
             Observation o = valid.get(i);
             Track t = assignment[i] < 0 ? new Track(nextId++) : tracks.get(assignment[i]);
             t.update(o, now);
+            observed.add(t);
             result.add(new Hand(t, o));
         }
-        // Do not evict a briefly missing track in favor of an unmatched noisy detection.
-        for (Hand h : result) {
-            boolean exists = false;
-            for (Track t : tracks) if (t.id == h.id) exists = true;
-            if (!exists && tracks.size() < 2) {
-                Track t = new Track(h.id); t.update(new Observation(h.raw, h.label, 1f), now);
-                tracks.add(t);
-            }
-        }
+        // Retain a missing hand's identity, but reset its filters on return so the filter's
+        // catch-up motion cannot leak unseen travel into a resumed grab.
+        for (Track t : tracks) t.missed = !observed.contains(t);
+        for (Track t : observed) if (!tracks.contains(t) && tracks.size() < 2) tracks.add(t);
         return result;
     }
 
@@ -89,6 +86,7 @@ final class HandTracks {
         final int id;
         String label = "?";
         long seen;
+        boolean missed;
         float vx, vy;
         float[] raw, filtered = new float[42], debug = new float[42];
         final Euro[] motion = new Euro[21], visual = new Euro[21];
@@ -97,7 +95,8 @@ final class HandTracks {
             for (int i = 0; i < 21; i++) { motion[i] = new Euro(4f, .035f); visual[i] = new Euro(3f, .025f); }
         }
         void update(Observation o, long now) {
-            float dt = seen == 0 ? 0 : (now - seen) / 1e9f;
+            float dt = seen == 0 || missed ? 0 : (now - seen) / 1e9f;
+            missed = false;
             if (raw != null && dt > 0 && dt < .2f) {
                 vx = .5f * vx + .5f * (palmX(o.xy) - palmX(raw)) / dt;
                 vy = .5f * vy + .5f * (palmY(o.xy) - palmY(raw)) / dt;
