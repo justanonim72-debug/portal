@@ -162,13 +162,14 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
                     analysisToSensor,
                     width,
                     height,
-                    rotation);
+                    rotation,
+                    started);
             stateRef.set(portal);
 
             double ms = (System.nanoTime() - started) / 1_000_000.0;
             updatePerf(ms, portal.hands);
         } catch (Throwable error) {
-            stateRef.set(PortalState.none());
+            // Preserve the last coherent panel on an isolated failed frame.
             listener.onTrackerError("Tracking frame gagal: " + error.getMessage());
         } finally {
             if (mpImage != null) mpImage.close();

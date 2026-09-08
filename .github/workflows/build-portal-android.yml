@@ -2,8 +2,10 @@ name: Build Portal Android APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths: ["android/**", ".github/workflows/build-portal-android.yml"]
   push:
-    branches: [main]
+    branches: [main, "codex/**"]
     paths:
       - "android/**"
       - ".github/workflows/build-portal-android.yml"
@@ -58,12 +60,12 @@ jobs:
           test -s android/app/src/main/assets/hand_landmarker.task
           sha256sum android/app/src/main/assets/hand_landmarker.task
 
-      - name: Build debug APK
+      - name: Test, lint and build debug APK
         working-directory: android
         shell: bash
         run: |
           set -euo pipefail
-          gradle --no-daemon :app:assembleDebug --stacktrace
+          gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
 
       - name: Verify APK
         shell: bash
@@ -86,3 +88,12 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-reports
+          path: |
+            android/app/build/reports/
+            android/app/build/test-results/
