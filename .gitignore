@@ -3,3 +3,4 @@
 android/local.properties
 android/app/src/main/assets/hand_landmarker.task
 dist/
+android/app/src/androidTest/assets/right_hands.jpg

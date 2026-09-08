@@ -60,6 +60,11 @@ jobs:
           test -s android/app/src/main/assets/hand_landmarker.task
           sha256sum android/app/src/main/assets/hand_landmarker.task
 
+      - name: Fetch official MediaPipe coordinate test fixture
+        run: |
+          mkdir -p android/app/src/androidTest/assets
+          curl --fail --location --retry 4 https://storage.googleapis.com/mediapipe-assets/right_hands.jpg -o android/app/src/androidTest/assets/right_hands.jpg
+
       - name: Test, lint and build debug APK
         working-directory: android
         shell: bash
