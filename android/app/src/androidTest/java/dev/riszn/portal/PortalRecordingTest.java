@@ -9,6 +9,7 @@ import android.media.MediaMetadataRetriever;
 import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.widget.TextView;
+import android.util.Log;
 import androidx.camera.video.MediaStoreOutputOptions;
 import androidx.camera.video.Recording;
 import androidx.camera.video.VideoRecordEvent;
@@ -37,13 +38,20 @@ public class PortalRecordingTest {
     @Test public void frontAndBackCameraRecordTheFilterAfterLifecycleRebind() throws Exception {
         try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
             awaitPreview(scenario);
-            recordAndVerify(scenario,"front");
+            recordAndVerify(scenario,"front",true);
             scenario.moveToState(Lifecycle.State.CREATED);
             scenario.moveToState(Lifecycle.State.RESUMED);
             awaitPreview(scenario);
             scenario.onActivity(activity -> ((TextView)field(activity,"flipButton")).performClick());
             awaitPreview(scenario);
-            recordAndVerify(scenario,"back");
+            recordAndVerify(scenario,"back",true);
+        }
+    }
+    @Test public void unfilteredCameraXControlProducesMp4() throws Exception {
+        try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(a -> ((LifecycleCameraController)field(a,"cameraController")).setEffects(java.util.Collections.emptySet()));
+            awaitPreview(scenario);
+            recordAndVerify(scenario,"unfiltered-control",false);
         }
     }
     private void awaitPreview(ActivityScenario<MainActivity> scenario) {
@@ -57,11 +65,12 @@ public class PortalRecordingTest {
         fail("Preview never streamed: "+state.get());
     }
     @SuppressWarnings("unchecked")
-    private void recordAndVerify(ActivityScenario<MainActivity> scenario,String name) throws Exception {
-        CountDownLatch drained=new CountDownLatch(1), started=new CountDownLatch(1), finished=new CountDownLatch(1);
+    private void recordAndVerify(ActivityScenario<MainActivity> scenario,String name,boolean filtered) throws Exception {
+        CountDownLatch drained=new CountDownLatch(1), started=new CountDownLatch(1), finished=new CountDownLatch(1), enoughData=new CountDownLatch(1);
         AtomicReference<MainActivity> activity=new AtomicReference<>();
         AtomicReference<Recording> recording=new AtomicReference<>();
         AtomicReference<VideoRecordEvent.Finalize> finalized=new AtomicReference<>();
+        AtomicReference<String> progress=new AtomicReference<>("no events");
         scenario.onActivity(a -> {
             activity.set(a);
             ((LifecycleCameraController)field(a,"cameraController")).clearImageAnalysisAnalyzer();
@@ -80,25 +89,32 @@ public class PortalRecordingTest {
                     .setContentValues(values).build();
             recording.set(((LifecycleCameraController)field(a,"cameraController")).startRecording(output,AudioConfig.AUDIO_DISABLED,
                     ContextCompat.getMainExecutor(a), event -> {
+                        var stats=event.getRecordingStats();
+                        progress.set(event.getClass().getSimpleName()+" bytes="+stats.getNumBytesRecorded()+" duration="+stats.getRecordedDurationNanos());
+                        Log.i("PortalRecordingTest",name+" "+progress.get());
+                        if(stats.getNumBytesRecorded()>0 && stats.getRecordedDurationNanos()>=1_500_000_000L)enoughData.countDown();
                         if(event instanceof VideoRecordEvent.Start)started.countDown();
                         if(event instanceof VideoRecordEvent.Finalize){finalized.set((VideoRecordEvent.Finalize)event);finished.countDown();}
                     }));
         });
         try {
             assertTrue("Recorder did not start",started.await(15,TimeUnit.SECONDS));
-            SystemClock.sleep(1800);
+            // Start announces encoder startup, not a keyframe. Wait for actual encoded media.
+            enoughData.await(20,TimeUnit.SECONDS);
         } finally { scenario.onActivity(a -> recording.get().stop()); }
         assertTrue("MP4 did not finalize",finished.await(20,TimeUnit.SECONDS));
-        assertFalse("Recording error "+finalized.get().getError(),finalized.get().hasError());
+        Log.i("PortalRecordingTest",name+" finalize error="+finalized.get().getError()+" cause="+finalized.get().getCause()+" "+progress.get());
+        assertFalse(name+" Recording error "+finalized.get().getError()+" cause="+finalized.get().getCause()+" "+progress.get(),finalized.get().hasError());
+        assertEquals(name+" did not encode 1.5 seconds: "+progress.get(),0,enoughData.getCount());
         var uri=finalized.get().getOutputResults().getOutputUri();
         try(MediaMetadataRetriever retriever=new MediaMetadataRetriever()) {
             retriever.setDataSource(activity.get(),uri);
-            assertTrue(Long.parseLong(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION))>500);
+            assertTrue(Long.parseLong(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION))>=1500);
             Bitmap frame=retriever.getFrameAtTime(1_000_000,MediaMetadataRetriever.OPTION_CLOSEST);
             assertNotNull("MP4 has no decodable frame",frame);
             // Violet's green channel is <= 31 even for white input; blue is >= 46 even for black.
             // A plain/unfiltered camera recording cannot satisfy this across the entire test scene.
-            for(int x=1;x<5;x++)for(int y=1;y<5;y++) {
+            if(filtered)for(int x=1;x<5;x++)for(int y=1;y<5;y++) {
                 int pixel=frame.getPixel(frame.getWidth()*x/5,frame.getHeight()*y/5);
                 assertTrue("Recorded frame lacks violet filter: "+Integer.toHexString(pixel),
                         Color.green(pixel)<55 && Color.blue(pixel)>Color.green(pixel)+10);

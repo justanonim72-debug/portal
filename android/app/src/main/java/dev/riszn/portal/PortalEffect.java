@@ -12,6 +12,7 @@ import android.opengl.GLES20;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.view.Surface;
+import android.util.Log;
 import androidx.camera.core.CameraEffect;
 import androidx.camera.core.SurfaceOutput;
 import androidx.camera.core.SurfaceProcessor;
@@ -24,6 +25,7 @@ import java.util.concurrent.Executor;
 
 /** A single native GPU path for the live camera and Recorder, separate from inference. */
 final class PortalEffect implements SurfaceProcessor, AutoCloseable {
+    private static final String TAG = "PortalEffect";
     private final HandlerThread thread = new HandlerThread("Portal-Camera-GL");
     private final Handler handler;
     private final Executor executor;
@@ -61,14 +63,16 @@ final class PortalEffect implements SurfaceProcessor, AutoCloseable {
             input.texture.setDefaultBufferSize(request.getResolution().getWidth(),request.getResolution().getHeight());
             input.texture.setOnFrameAvailableListener(ignored -> render(input),handler);
             inputs.add(input); active = input;
+            Log.d(TAG,"Input "+input.id+" "+request.getResolution());
             request.provideSurface(input.surface,executor,result -> {
                 makeCurrent(placeholder);
                 input.texture.setOnFrameAvailableListener(null);
                 input.surface.release(); input.texture.release(); GLES20.glDeleteTextures(1,new int[]{input.id},0);
                 inputs.remove(input); if (active == input) active = null;
+                Log.d(TAG,"Input released "+input.id+" result="+result.getResultCode());
                 releaseWhenUnused();
             });
-        } catch (RuntimeException error) { request.willNotProvideSurface(); errorListener.accept(error); }
+        } catch (RuntimeException error) { request.willNotProvideSurface(); reportError(error); }
     }
 
     @Override public void onOutputSurface(SurfaceOutput output) {
@@ -79,7 +83,8 @@ final class PortalEffect implements SurfaceProcessor, AutoCloseable {
             EGLSurface egl = EGL14.eglCreateWindowSurface(display,config,surface,new int[]{EGL14.EGL_NONE},0);
             if (egl == EGL14.EGL_NO_SURFACE) throw new IllegalStateException("Cannot create camera output: " + EGL14.eglGetError());
             outputs.put(output,egl);
-        } catch (RuntimeException error) { output.close(); errorListener.accept(error); }
+            Log.d(TAG,"Output targets="+output.getTargets()+" size="+output.getSize());
+        } catch (RuntimeException error) { output.close(); reportError(error); }
     }
 
     private void render(Input input) {
@@ -88,6 +93,7 @@ final class PortalEffect implements SurfaceProcessor, AutoCloseable {
             makeCurrent(placeholder);
             input.texture.updateTexImage(); // latest camera buffer, no inference wait or frame queue
             input.texture.getTransformMatrix(textureMatrix);
+            if (++input.frames == 1 || input.frames % 120 == 0) Log.d(TAG,"Frame "+input.frames+" input="+input.id+" timestamp="+input.texture.getTimestamp()+" outputs="+outputs.size());
             for (Map.Entry<SurfaceOutput,EGLSurface> entry : outputs.entrySet()) {
                 SurfaceOutput output = entry.getKey();
                 makeCurrent(entry.getValue());
@@ -97,7 +103,12 @@ final class PortalEffect implements SurfaceProcessor, AutoCloseable {
                 EGLExt.eglPresentationTimeANDROID(display,entry.getValue(),input.texture.getTimestamp());
                 if (!EGL14.eglSwapBuffers(display,entry.getValue())) throw new IllegalStateException("Camera swap failed: " + EGL14.eglGetError());
             }
-        } catch (RuntimeException error) { errorListener.accept(error); }
+        } catch (RuntimeException error) { reportError(error); }
+    }
+
+    private void reportError(RuntimeException error) {
+        Log.e(TAG,"Camera effect failed",error);
+        errorListener.accept(error);
     }
 
     private void initialize() {
@@ -122,6 +133,7 @@ final class PortalEffect implements SurfaceProcessor, AutoCloseable {
     }
     private void removeOutput(SurfaceOutput output) {
         EGLSurface surface = outputs.remove(output);
+        Log.d(TAG,"Output closed targets="+output.getTargets());
         if (surface != null) { makeCurrent(placeholder); EGL14.eglDestroySurface(display,surface); }
         output.close();
     }
@@ -145,6 +157,7 @@ final class PortalEffect implements SurfaceProcessor, AutoCloseable {
     }
     private static final class Input {
         final int id;
+        int frames;
         final SurfaceTexture texture;
         final Surface surface;
         Input(int id) { this.id = id; texture = new SurfaceTexture(id); surface = new Surface(texture); }
