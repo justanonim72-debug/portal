@@ -2,10 +2,14 @@ name: Build Portal Android APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths: ["android/**", "tools/test-core.py", "tools/verify-android.sh", ".github/workflows/build-portal-android.yml"]
   push:
-    branches: [main]
+    branches: [main, "codex/**"]
     paths:
       - "android/**"
+      - "tools/test-core.py"
+      - "tools/verify-android.sh"
       - ".github/workflows/build-portal-android.yml"
 
 permissions:
@@ -58,12 +62,35 @@ jobs:
           test -s android/app/src/main/assets/hand_landmarker.task
           sha256sum android/app/src/main/assets/hand_landmarker.task
 
-      - name: Build debug APK
+      - name: Fetch official MediaPipe coordinate test fixture
+        run: |
+          mkdir -p android/app/src/androidTest/assets
+          curl --fail --location --retry 4 https://storage.googleapis.com/mediapipe-assets/right_hands.jpg -o android/app/src/androidTest/assets/right_hands.jpg
+
+      - name: Test, lint and build debug APK
         working-directory: android
         shell: bash
         run: |
           set -euo pipefail
-          gradle --no-daemon :app:assembleDebug --stacktrace
+          gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+
+      - name: Enable KVM for Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Verify GPU pixels, camera lifecycle and filtered MP4
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_2
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front emulated
+          script: |
+            sh tools/verify-android.sh
 
       - name: Verify APK
         shell: bash
@@ -86,3 +113,15 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-reports
+          path: |
+            android/app/build/reports/
+            android/app/build/test-results/
+            android/app/build/recording-evidence/
+            android/app/build/outputs/androidTest-results/
+            android/app/build/diagnostics/

@@ -1,479 +1,182 @@
 package dev.riszn.portal;
 
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.LinearGradient;
-import android.graphics.Paint;
-import android.graphics.Path;
-import android.graphics.PointF;
-import android.graphics.PorterDuff;
-import android.graphics.Rect;
-import android.graphics.Shader;
-
-import androidx.camera.effects.Frame;
-
+import android.graphics.Matrix;
+import android.opengl.GLES11Ext;
+import android.opengl.GLES20;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 import java.util.concurrent.atomic.AtomicReference;
 
+/** GL camera shader shared by preview and video. Never reads camera pixels back to the CPU. */
 final class PortalRenderer {
-    // Keep effects readable, but visually much closer to the reference: translucent filtered panel,
-    // thin bright perimeter, minimal decoration. No giant round glow / particle halo.
-    private static final Style[] STYLES = new Style[] {
-            new Style("THERMAL HOLO", 0x3600CFFF, 0x30FF4FCB, 0xFFE8FCFF, 0xFF55E8FF, true, false),
-            new Style("VOID NEON",    0x351A083A, 0x342C7FFF, 0xFFE6E9FF, 0xFF9B76FF, true, false),
-            new Style("XRAY GLITCH", 0x30216078, 0x2B54BFFF, 0xFFF5FCFF, 0xFF82D3FF, true, false),
-            new Style("HOLOGRAM+",    0x3000C9E8, 0x2B39E7D0, 0xFFE9FFFF, 0xFF63E8FF, true, true),
-            new Style("RAW SHIELD",   0x1100D7FF, 0x0D00D7FF, 0xFFF0FFFF, 0xFF61E8FF, false, false)
+    private static final String[] STYLES = {"VIOLET", "INVERT", "MONO", "THERMAL", "CLEAR"};
+    private static final int[][] BONES = {
+        {0,1},{1,2},{2,3},{3,4},{0,5},{5,6},{6,7},{7,8},{5,9},{9,10},{10,11},{11,12},
+        {9,13},{13,14},{14,15},{15,16},{13,17},{0,17},{17,18},{18,19},{19,20}
     };
-
-    private static final int[][] HAND_CONNECTIONS = new int[][] {
-            {0,1},{1,5},{5,9},{9,13},{13,17},{17,0},
-            {1,2},{2,3},{3,4},
-            {5,6},{6,7},{7,8},
-            {9,10},{10,11},{11,12},
-            {13,14},{14,15},{15,16},
-            {17,18},{18,19},{19,20}
-    };
-
-    private static final long SKELETON_STALE_NS = 300_000_000L;
-
+    static final String VERTEX = """
+        attribute vec2 aPosition;
+        uniform mat4 uTextureMatrix;
+        varying vec2 vTexture;
+        void main() {
+          gl_Position = vec4(aPosition, 0.0, 1.0);
+          vTexture = (uTextureMatrix * vec4(aPosition * 0.5 + 0.5, 0.0, 1.0)).xy;
+        }
+        """;
+    static final String FRAGMENT = """
+        #extension GL_OES_EGL_image_external : require
+        precision highp float;
+        uniform samplerExternalOES uCamera;
+        uniform vec2 uSize;
+        uniform vec2 uCorners[4];
+        uniform int uVisible;
+        uniform int uStyle;
+        varying vec2 vTexture;
+        float cross2(vec2 a, vec2 b) { return a.x*b.y-a.y*b.x; }
+        float edgeDistance(vec2 p, vec2 a, vec2 b) {
+          vec2 d = b-a;
+          float t = clamp(dot(p-a,d)/max(dot(d,d),0.0001),0.0,1.0);
+          return length(p-a-t*d);
+        }
+        void main() {
+          vec3 rgb = texture2D(uCamera, vTexture).rgb;
+          vec2 p = vec2(gl_FragCoord.x,uSize.y-gl_FragCoord.y);
+          if (uVisible == 1) {
+            float a = cross2(uCorners[1]-uCorners[0],p-uCorners[0]);
+            float b = cross2(uCorners[2]-uCorners[1],p-uCorners[1]);
+            float c = cross2(uCorners[3]-uCorners[2],p-uCorners[2]);
+            float d = cross2(uCorners[0]-uCorners[3],p-uCorners[3]);
+            bool inside = min(min(a,b),min(c,d)) >= 0.0 || max(max(a,b),max(c,d)) <= 0.0;
+            if (inside) {
+              float luma = dot(rgb,vec3(0.299,0.587,0.114));
+              if (uStyle == 0) rgb = vec3(rgb.r*0.55+0.10,rgb.g*0.12,rgb.b*0.65+0.18);
+              if (uStyle == 1) rgb = vec3(1.0)-rgb;
+              if (uStyle == 2) rgb = vec3(luma);
+              if (uStyle == 3) rgb = clamp(vec3(1.5)-abs(4.0*luma-vec3(3.0,2.0,1.0)),0.0,1.0);
+            }
+            float edge = min(min(edgeDistance(p,uCorners[0],uCorners[1]),edgeDistance(p,uCorners[1],uCorners[2])),
+                             min(edgeDistance(p,uCorners[2],uCorners[3]),edgeDistance(p,uCorners[3],uCorners[0])));
+            rgb = mix(rgb,vec3(0.88,0.85,0.95),(1.0-smoothstep(0.5,1.5,edge))*0.7);
+          }
+          gl_FragColor = vec4(rgb,1.0);
+        }
+        """;
+    private static final String LINES_VERTEX = """
+        attribute vec2 aPosition;
+        uniform vec2 uSize;
+        uniform float uPointSize;
+        void main() {
+          gl_Position = vec4(aPosition.x/uSize.x*2.0-1.0,1.0-aPosition.y/uSize.y*2.0,0.0,1.0);
+          gl_PointSize = uPointSize;
+        }
+        """;
+    private static final String LINES_FRAGMENT = "precision mediump float; uniform vec3 uColor; void main(){gl_FragColor=vec4(uColor,1.0);}";
     private final AtomicReference<PortalState> stateRef;
-    private float[] current = null;
-    private float[] target = null;
-    private long lastTargetStateNs = -1L;
-    private float visibility = 0f;
-    private long lastDrawNs = System.nanoTime();
-    private int styleIndex = 0;
-    private volatile boolean debug = false;
-    private boolean overlayWasDrawn = false;
+    private final FloatBuffer screen = buffer(new float[]{-1,-1,1,-1,-1,1,1,1});
+    private final FloatBuffer lines = ByteBuffer.allocateDirect(21*4*4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+    private final float[] mapped = new float[42], corners = new float[8];
+    private final Matrix analysisToOutput = new Matrix();
+    private volatile int style;
+    private volatile boolean debug;
+    private volatile double responseMs;
+    private long measuredState;
+    private int program, lineProgram, position, textureMatrix, camera, size, quad, visible, styleUniform;
+    private int linePosition, lineSize, lineColor, pointSize;
 
-    private final float[][] skeletonTarget = new float[2][];
-    private final float[][] skeletonCurrent = new float[2][];
-    private final long[] skeletonSeenNs = new long[] {0L, 0L};
-    private long lastSkeletonStateNs = -1L;
-
-    private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint particlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-
-    PortalRenderer(AtomicReference<PortalState> stateRef) {
-        this.stateRef = stateRef;
-        fillPaint.setStyle(Paint.Style.FILL);
-        strokePaint.setStyle(Paint.Style.STROKE);
-        strokePaint.setStrokeCap(Paint.Cap.ROUND);
-        strokePaint.setStrokeJoin(Paint.Join.ROUND);
-        particlePaint.setStyle(Paint.Style.FILL);
+    PortalRenderer(AtomicReference<PortalState> stateRef) { this.stateRef = stateRef; }
+    String nextStyle() { style = (style+1)%STYLES.length; return STYLES[style]; }
+    void setDebug(boolean enabled) { debug = enabled; }
+    double responseMs() { return responseMs; }
+    void initialize() {
+        program = link(VERTEX,FRAGMENT); lineProgram = link(LINES_VERTEX,LINES_FRAGMENT);
+        position = GLES20.glGetAttribLocation(program,"aPosition");
+        textureMatrix = uniform(program,"uTextureMatrix"); camera = uniform(program,"uCamera");
+        size = uniform(program,"uSize"); quad = uniform(program,"uCorners");
+        visible = uniform(program,"uVisible"); styleUniform = uniform(program,"uStyle");
+        linePosition = GLES20.glGetAttribLocation(lineProgram,"aPosition");
+        lineSize = uniform(lineProgram,"uSize"); lineColor = uniform(lineProgram,"uColor");
+        pointSize = uniform(lineProgram,"uPointSize");
     }
 
-    synchronized String nextStyle() {
-        styleIndex = (styleIndex + 1) % STYLES.length;
-        return STYLES[styleIndex].name;
-    }
-
-    synchronized String styleName() { return STYLES[styleIndex].name; }
-
-    void setDebug(boolean enabled) {
-        debug = enabled;
-        if (!enabled) {
-            skeletonTarget[0] = skeletonTarget[1] = null;
-            skeletonCurrent[0] = skeletonCurrent[1] = null;
-            skeletonSeenNs[0] = skeletonSeenNs[1] = 0L;
-        }
-    }
-
-    void resetTrackingVisuals() {
-        current = null;
-        target = null;
-        visibility = 0f;
-        lastTargetStateNs = -1L;
-        lastSkeletonStateNs = -1L;
-        skeletonTarget[0] = skeletonTarget[1] = null;
-        skeletonCurrent[0] = skeletonCurrent[1] = null;
-        skeletonSeenNs[0] = skeletonSeenNs[1] = 0L;
-    }
-
-    boolean draw(Frame frame) {
-        PortalState raw = stateRef.get();
+    void draw(int texture, float[] transform, Matrix sensorToOutput, int width, int height) {
+        PortalState state = stateRef.get();
         long now = System.nanoTime();
-        float dt = Math.min(0.05f, Math.max(1f / 240f, (now - lastDrawNs) / 1_000_000_000f));
-        lastDrawNs = now;
-
-        boolean freshPortal = raw != null && raw.mode != PortalState.Mode.NONE &&
-                raw.nodes != null && raw.nodes.length >= 8 &&
-                (now - raw.producedAtNanos) < 320_000_000L;
-
-        float targetVisibility = freshPortal ? 1f : 0f;
-        float visibilityRate = freshPortal ? 20f : 10f;
-        visibility += (targetVisibility - visibility) * (1f - (float) Math.exp(-visibilityRate * dt));
-        if (!freshPortal && visibility < 0.008f) visibility = 0f;
-
-        if (debug && raw != null && raw.producedAtNanos != lastSkeletonStateNs) {
-            acceptSkeletonTargets(raw, now);
-            lastSkeletonStateNs = raw.producedAtNanos;
+        analysisToOutput.set(state.analysisToSensor); analysisToOutput.postConcat(sensorToOutput);
+        GLES20.glViewport(0,0,width,height);
+        GLES20.glUseProgram(program);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,texture);
+        GLES20.glUniform1i(camera,0);
+        GLES20.glUniformMatrix4fv(textureMatrix,1,false,transform,0);
+        GLES20.glUniform2f(size,width,height);
+        GLES20.glUniform1i(visible,state.visible()?1:0);
+        GLES20.glUniform1i(styleUniform,style);
+        if (state.visible()) {
+            analysisToOutput.mapPoints(corners,state.nodes);
+            GLES20.glUniform2fv(quad,4,corners,0);
         }
-        if (debug) smoothSkeletons(dt, now);
-
-        boolean hasDebug = debug && hasFreshSkeleton(now);
-        boolean hasPortal = visibility > 0.008f && (freshPortal || current != null);
-        boolean needCanvas = hasDebug || hasPortal || overlayWasDrawn;
-        if (!needCanvas) return true;
-
-        Canvas canvas = frame.getOverlayCanvas();
-        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
-        overlayWasDrawn = hasDebug || hasPortal;
-
-        if (hasDebug && raw != null) drawSkeletons(canvas, frame, raw, now);
-
-        if (!hasPortal || raw == null || raw.mode == PortalState.Mode.NONE || raw.nodes == null || raw.nodes.length < 8) {
-            if (!freshPortal && visibility == 0f) {
-                current = null;
-                target = null;
-                lastTargetStateNs = -1L;
+        screen.position(0);
+        GLES20.glEnableVertexAttribArray(position);
+        GLES20.glVertexAttribPointer(position,2,GLES20.GL_FLOAT,false,0,screen);
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4);
+        GLES20.glDisableVertexAttribArray(position);
+        if (state.visible()) {
+            GLES20.glUseProgram(lineProgram); GLES20.glUniform2f(lineSize,width,height);
+            GLES20.glUniform3f(lineColor,.88f,.85f,.95f); GLES20.glUniform1f(pointSize,3f);
+            GLES20.glEnableVertexAttribArray(linePosition);
+            lines.clear(); lines.put(corners); lines.flip();
+            GLES20.glVertexAttribPointer(linePosition,2,GLES20.GL_FLOAT,false,0,lines);
+            GLES20.glDrawArrays(GLES20.GL_POINTS,0,4);
+            GLES20.glUniform3f(lineColor,.5f,1f,.8f); GLES20.glUniform1f(pointSize,5f);
+            for (int handle : state.grabbedHandles) {
+                int a = handle < 4 ? handle : handle-4, b = handle < 4 ? a : (a+1)%4;
+                lines.clear(); lines.put((corners[a*2]+corners[b*2])*.5f).put((corners[a*2+1]+corners[b*2+1])*.5f); lines.flip();
+                GLES20.glVertexAttribPointer(linePosition,2,GLES20.GL_FLOAT,false,0,lines);
+                GLES20.glDrawArrays(GLES20.GL_POINTS,0,1);
             }
-            return true;
+            GLES20.glDisableVertexAttribArray(linePosition);
         }
-
-        if (target == null || target.length != raw.nodes.length || current == null || current.length != raw.nodes.length) {
-            target = raw.nodes.clone();
-            current = raw.nodes.clone();
-            lastTargetStateNs = raw.producedAtNanos;
-        } else if (raw.producedAtNanos != lastTargetStateNs) {
-            for (int i = 0; i < raw.nodes.length / 2; i++) {
-                int j = i * 2;
-                float baseX = current[j];
-                float baseY = current[j + 1];
-                float dx = raw.nodes[j] - baseX;
-                float dy = raw.nodes[j + 1] - baseY;
-                float d = (float) Math.hypot(dx, dy);
-                float maxJump = 0.15f;
-                if (d > maxJump) {
-                    float s = maxJump / d;
-                    dx *= s;
-                    dy *= s;
-                }
-                target[j] = baseX + dx;
-                target[j + 1] = baseY + dy;
+        // Geometry is already filtered and constrained. Renderer must not smooth/reshape it again.
+        if (debug && now-state.producedAtNanos < 200_000_000L) {
+            GLES20.glUseProgram(lineProgram); GLES20.glUniform1f(pointSize,6f); GLES20.glUniform2f(lineSize,width,height);
+            GLES20.glEnableVertexAttribArray(linePosition);
+            for (int h = 0; h < state.skeletons.length; h++) {
+                analysisToOutput.mapPoints(mapped,state.skeletons[h]);
+                if ((state.handIds[h]&1) == 1) GLES20.glUniform3f(lineColor,.35f,.91f,1f);
+                else GLES20.glUniform3f(lineColor,1f,.39f,.85f);
+                lines.clear();
+                for (int[] bone : BONES) for (int joint : bone) lines.put(mapped[joint*2]).put(mapped[joint*2+1]);
+                lines.flip(); GLES20.glVertexAttribPointer(linePosition,2,GLES20.GL_FLOAT,false,0,lines);
+                GLES20.glLineWidth(2f); GLES20.glDrawArrays(GLES20.GL_LINES,0,BONES.length*2);
+                lines.clear(); lines.put(mapped); lines.flip();
+                GLES20.glVertexAttribPointer(linePosition,2,GLES20.GL_FLOAT,false,0,lines);
+                GLES20.glDrawArrays(GLES20.GL_POINTS,0,21);
             }
-            lastTargetStateNs = raw.producedAtNanos;
+            GLES20.glDisableVertexAttribArray(linePosition);
         }
-
-        // All four corners are direct manipulation anchors, so keep them responsive. Small motion
-        // gets enough damping to stop shimmer; deliberate pulls catch up quickly.
-        for (int i = 0; i < current.length / 2; i++) {
-            int j = i * 2;
-            float dx = target[j] - current[j];
-            float dy = target[j + 1] - current[j + 1];
-            float d = (float) Math.hypot(dx, dy);
-            float rate = d > 0.075f ? 70f : (d > 0.022f ? 48f : 28f);
-            float a = 1f - (float) Math.exp(-rate * dt);
-            current[j] += dx * a;
-            current[j + 1] += dy * a;
-        }
-
-        PointF[] pts = new PointF[current.length / 2];
-        for (int i = 0; i < pts.length; i++) {
-            pts[i] = toBuffer(frame, raw, current[i * 2], current[i * 2 + 1]);
-        }
-
-        // Four-corner reference panel: almost straight sides with only tiny rounded corners.
-        Path path = referenceQuadPath(pts);
-        Style style = STYLES[styleIndex];
-        Rect crop = frame.getCropRect();
-
-        fillPaint.setShader(new LinearGradient(
-                crop.left, crop.top,
-                crop.right, crop.bottom,
-                withAlpha(style.fillA, visibility),
-                withAlpha(style.fillB, visibility),
-                Shader.TileMode.CLAMP));
-        canvas.drawPath(path, fillPaint);
-        fillPaint.setShader(null);
-
-        if (style.grid || style.scan) {
-            canvas.save();
-            canvas.clipPath(path);
-            if (style.grid) drawGrid(canvas, crop, style, now);
-            if (style.scan) drawScan(canvas, crop, style, now);
-            canvas.restore();
-        }
-
-        // Thin layered perimeter like the first reference video, not a thick circular aura.
-        strokePaint.setColor(withAlpha(style.accent, visibility * 0.18f));
-        strokePaint.setStrokeWidth(8f);
-        canvas.drawPath(path, strokePaint);
-        strokePaint.setColor(withAlpha(style.edge, visibility * 0.98f));
-        strokePaint.setStrokeWidth(2.0f);
-        canvas.drawPath(path, strokePaint);
-        strokePaint.setColor(withAlpha(style.accent, visibility * 0.62f));
-        strokePaint.setStrokeWidth(0.9f);
-        canvas.drawPath(path, strokePaint);
-
-        drawEnergyNodes(canvas, pts, raw, style, now);
-        return true;
-    }
-
-    private void acceptSkeletonTargets(PortalState raw, long now) {
-        if (raw.skeletons == null || raw.skeletons.length == 0) return;
-
-        float[] a = validSkeleton(raw.skeletons[0]);
-        float[] b = raw.skeletons.length > 1 ? validSkeleton(raw.skeletons[1]) : null;
-
-        if (a != null && b != null) {
-            if (skeletonCurrent[0] != null && skeletonCurrent[1] != null) {
-                float straight = wristDistance(a, skeletonCurrent[0]) + wristDistance(b, skeletonCurrent[1]);
-                float crossed = wristDistance(a, skeletonCurrent[1]) + wristDistance(b, skeletonCurrent[0]);
-                if (crossed < straight) {
-                    setSkeletonTarget(0, b, now);
-                    setSkeletonTarget(1, a, now);
-                } else {
-                    setSkeletonTarget(0, a, now);
-                    setSkeletonTarget(1, b, now);
-                }
-            } else if (a[0] <= b[0]) {
-                setSkeletonTarget(0, a, now);
-                setSkeletonTarget(1, b, now);
-            } else {
-                setSkeletonTarget(0, b, now);
-                setSkeletonTarget(1, a, now);
-            }
-            return;
-        }
-
-        float[] only = a != null ? a : b;
-        if (only == null) return;
-        int slot;
-        if (skeletonCurrent[0] == null && skeletonCurrent[1] == null) slot = 0;
-        else if (skeletonCurrent[0] == null) slot = 0;
-        else if (skeletonCurrent[1] == null) slot = 1;
-        else slot = wristDistance(only, skeletonCurrent[0]) <= wristDistance(only, skeletonCurrent[1]) ? 0 : 1;
-        setSkeletonTarget(slot, only, now);
-    }
-
-    private void setSkeletonTarget(int slot, float[] incoming, long now) {
-        skeletonTarget[slot] = incoming.clone();
-        skeletonSeenNs[slot] = now;
-        if (skeletonCurrent[slot] == null || skeletonCurrent[slot].length != incoming.length) {
-            skeletonCurrent[slot] = incoming.clone();
+        if (state.producedAtNanos != measuredState && state.analysisStartedAtNanos != 0) {
+            responseMs = (now-state.analysisStartedAtNanos)/1e6; measuredState = state.producedAtNanos;
         }
     }
-
-    private void smoothSkeletons(float dt, long now) {
-        for (int slot = 0; slot < 2; slot++) {
-            float[] cur = skeletonCurrent[slot];
-            float[] tgt = skeletonTarget[slot];
-            if (cur == null || tgt == null || cur.length != tgt.length) continue;
-            if (now - skeletonSeenNs[slot] > SKELETON_STALE_NS) continue;
-
-            for (int i = 0; i < cur.length / 2; i++) {
-                int j = i * 2;
-                float dx = tgt[j] - cur[j];
-                float dy = tgt[j + 1] - cur[j + 1];
-                float d = (float) Math.hypot(dx, dy);
-                boolean tip = i == 4 || i == 8 || i == 12 || i == 16 || i == 20;
-                float rate;
-                if (tip) rate = d > 0.055f ? 58f : (d > 0.018f ? 40f : 24f);
-                else rate = d > 0.055f ? 46f : (d > 0.018f ? 32f : 20f);
-                float alpha = 1f - (float) Math.exp(-rate * dt);
-                cur[j] += dx * alpha;
-                cur[j + 1] += dy * alpha;
-            }
-        }
+    void release() { GLES20.glDeleteProgram(program); GLES20.glDeleteProgram(lineProgram); }
+    private static FloatBuffer buffer(float[] values) {
+        FloatBuffer b = ByteBuffer.allocateDirect(values.length*4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+        b.put(values).flip(); return b;
     }
-
-    private boolean hasFreshSkeleton(long now) {
-        for (int slot = 0; slot < 2; slot++) {
-            if (skeletonCurrent[slot] != null && now - skeletonSeenNs[slot] <= SKELETON_STALE_NS) return true;
-        }
-        return false;
+    private static int uniform(int p,String name) { return GLES20.glGetUniformLocation(p,name); }
+    private static int shader(int type,String source) {
+        int shader = GLES20.glCreateShader(type); GLES20.glShaderSource(shader,source); GLES20.glCompileShader(shader);
+        int[] ok = new int[1]; GLES20.glGetShaderiv(shader,GLES20.GL_COMPILE_STATUS,ok,0);
+        if (ok[0] == 0) { String error = GLES20.glGetShaderInfoLog(shader); GLES20.glDeleteShader(shader); throw new IllegalStateException(error); }
+        return shader;
     }
-
-    private void drawSkeletons(Canvas canvas, Frame frame, PortalState raw, long now) {
-        for (int hand = 0; hand < 2; hand++) {
-            float[] flat = skeletonCurrent[hand];
-            if (flat == null || flat.length < 42 || now - skeletonSeenNs[hand] > SKELETON_STALE_NS) continue;
-
-            PointF[] p = new PointF[21];
-            for (int i = 0; i < 21; i++) {
-                p[i] = toBuffer(frame, raw, flat[i * 2], flat[i * 2 + 1]);
-            }
-
-            int lineColor = hand == 0 ? 0xFF59E9FF : 0xFFFF63D8;
-            strokePaint.setColor(withAlpha(lineColor, 0.90f));
-            strokePaint.setStrokeWidth(3.0f);
-            for (int[] edge : HAND_CONNECTIONS) {
-                PointF p0 = p[edge[0]];
-                PointF p1 = p[edge[1]];
-                canvas.drawLine(p0.x, p0.y, p1.x, p1.y, strokePaint);
-            }
-
-            for (int i = 0; i < p.length; i++) {
-                boolean controlTip = i == 4 || i == 8 || i == 12 || i == 16 || i == 20;
-                particlePaint.setColor(controlTip ? 0xFFFFFF55 : withAlpha(lineColor, 0.94f));
-                canvas.drawCircle(p[i].x, p[i].y, controlTip ? 5.8f : 2.8f, particlePaint);
-            }
-        }
-    }
-
-    private void drawGrid(Canvas c, Rect crop, Style style, long now) {
-        strokePaint.setStrokeWidth(0.8f);
-        strokePaint.setColor(withAlpha(style.accent, visibility * 0.09f));
-        float step = Math.max(32f, Math.min(crop.width(), crop.height()) / 12f);
-        float drift = ((now / 1_000_000L) % 1400L) / 1400f * step;
-        for (float x = crop.left - step + drift; x < crop.right + step; x += step) {
-            c.drawLine(x, crop.top, x, crop.bottom, strokePaint);
-        }
-        for (float y = crop.top - step + drift; y < crop.bottom + step; y += step) {
-            c.drawLine(crop.left, y, crop.right, y, strokePaint);
-        }
-    }
-
-    private void drawScan(Canvas c, Rect crop, Style style, long now) {
-        float travel = ((now / 1_000_000L) % 1650L) / 1650f;
-        float y = crop.top + travel * crop.height();
-        strokePaint.setColor(withAlpha(style.edge, visibility * 0.20f));
-        strokePaint.setStrokeWidth(2.0f);
-        c.drawLine(crop.left, y, crop.right, y, strokePaint);
-        strokePaint.setColor(withAlpha(style.accent, visibility * 0.07f));
-        strokePaint.setStrokeWidth(8f);
-        c.drawLine(crop.left, y, crop.right, y, strokePaint);
-    }
-
-    private void drawEnergyNodes(Canvas c, PointF[] pts, PortalState raw, Style style, long now) {
-        if (pts.length < 4) return;
-        float pulse = 0.5f + 0.5f * (float) Math.sin(now / 150_000_000.0);
-        for (int anchor : raw.anchors) {
-            if (anchor < 0 || anchor >= pts.length) continue;
-            PointF p = pts[anchor];
-            particlePaint.setColor(withAlpha(style.edge, visibility * 0.95f));
-            c.drawCircle(p.x, p.y, 2.4f + pulse * 0.7f, particlePaint);
-            particlePaint.setColor(withAlpha(style.accent, visibility * 0.10f));
-            c.drawCircle(p.x, p.y, 6.0f + pulse * 1.5f, particlePaint);
-        }
-    }
-
-    /**
-     * Reference-style four-sided portal. Sides stay straight. Corners only get a very small radius
-     * so a stretched rectangle/trapezoid never turns into the oval/leaf shape from old builds.
-     */
-    private static Path referenceQuadPath(PointF[] p) {
-        Path path = new Path();
-        if (p == null || p.length < 4) return path;
-        if (p.length != 4) {
-            path.moveTo(p[0].x, p[0].y);
-            for (int i = 1; i < p.length; i++) path.lineTo(p[i].x, p[i].y);
-            path.close();
-            return path;
-        }
-
-        float[] radius = new float[4];
-        for (int i = 0; i < 4; i++) {
-            PointF prev = p[(i + 3) % 4];
-            PointF cur = p[i];
-            PointF next = p[(i + 1) % 4];
-            float a = distance(cur, prev);
-            float b = distance(cur, next);
-            radius[i] = Math.min(10f, Math.min(a, b) * 0.075f);
-        }
-
-        PointF start = toward(p[0], p[1], radius[0]);
-        path.moveTo(start.x, start.y);
-        for (int step = 1; step <= 4; step++) {
-            int i = step % 4;
-            PointF prev = p[(i + 3) % 4];
-            PointF cur = p[i];
-            PointF next = p[(i + 1) % 4];
-            PointF approach = toward(cur, prev, radius[i]);
-            PointF depart = toward(cur, next, radius[i]);
-            path.lineTo(approach.x, approach.y);
-            path.quadTo(cur.x, cur.y, depart.x, depart.y);
-        }
-        path.close();
-        return path;
-    }
-
-    private static PointF toward(PointF from, PointF to, float distance) {
-        float dx = to.x - from.x;
-        float dy = to.y - from.y;
-        float d = (float) Math.hypot(dx, dy);
-        if (d < 1e-4f || distance <= 0f) return new PointF(from.x, from.y);
-        float t = Math.min(1f, distance / d);
-        return new PointF(from.x + dx * t, from.y + dy * t);
-    }
-
-    private static float distance(PointF a, PointF b) {
-        return (float) Math.hypot(a.x - b.x, a.y - b.y);
-    }
-
-    /**
-     * Exact cross-use-case mapping:
-     * MediaPipe rotated/display normalized -> undo app mirror -> undo MediaPipe rotation ->
-     * ImageAnalysis buffer pixels -> camera sensor -> OverlayEffect buffer pixels.
-     */
-    private static PointF toBuffer(Frame frame, PortalState raw, float displayX, float displayY) {
-        float x = displayX;
-        float y = displayY;
-        if (raw.sourceMirrored) x = 1f - x;
-
-        float ax;
-        float ay;
-        switch (raw.analysisRotationDegrees) {
-            case 90:
-                ax = y;
-                ay = 1f - x;
-                break;
-            case 180:
-                ax = 1f - x;
-                ay = 1f - y;
-                break;
-            case 270:
-                ax = 1f - y;
-                ay = x;
-                break;
-            default:
-                ax = x;
-                ay = y;
-                break;
-        }
-
-        float[] point = new float[] {
-                ax * raw.analysisWidth,
-                ay * raw.analysisHeight
-        };
-        raw.analysisToSensor.mapPoints(point);
-        frame.getSensorToBufferTransform().mapPoints(point);
-        return new PointF(point[0], point[1]);
-    }
-
-    private static float[] validSkeleton(float[] in) {
-        return in != null && in.length >= 42 ? in : null;
-    }
-
-    private static float wristDistance(float[] a, float[] b) {
-        if (a == null || b == null || a.length < 2 || b.length < 2) return Float.MAX_VALUE / 4f;
-        return (float) Math.hypot(a[0] - b[0], a[1] - b[1]);
-    }
-
-    private static int withAlpha(int color, float alpha) {
-        int a = Math.max(0, Math.min(255, Math.round(Color.alpha(color) * alpha)));
-        return (color & 0x00FFFFFF) | (a << 24);
-    }
-
-    private static final class Style {
-        final String name;
-        final int fillA;
-        final int fillB;
-        final int edge;
-        final int accent;
-        final boolean scan;
-        final boolean grid;
-
-        Style(String name, int fillA, int fillB, int edge, int accent, boolean scan, boolean grid) {
-            this.name = name;
-            this.fillA = fillA;
-            this.fillB = fillB;
-            this.edge = edge;
-            this.accent = accent;
-            this.scan = scan;
-            this.grid = grid;
-        }
+    private static int link(String vertex,String fragment) {
+        int v = shader(GLES20.GL_VERTEX_SHADER,vertex), f = shader(GLES20.GL_FRAGMENT_SHADER,fragment);
+        int p = GLES20.glCreateProgram(); GLES20.glAttachShader(p,v); GLES20.glAttachShader(p,f); GLES20.glLinkProgram(p);
+        GLES20.glDeleteShader(v); GLES20.glDeleteShader(f);
+        int[] ok = new int[1]; GLES20.glGetProgramiv(p,GLES20.GL_LINK_STATUS,ok,0);
+        if(ok[0] == 0) { String error = GLES20.glGetProgramInfoLog(p); GLES20.glDeleteProgram(p); throw new IllegalStateException(error); }
+        return p;
     }
 }

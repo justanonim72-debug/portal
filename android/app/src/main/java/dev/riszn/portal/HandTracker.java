@@ -21,6 +21,7 @@ import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult;
 import java.nio.ByteBuffer;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
 final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
     interface Listener {
@@ -34,6 +35,7 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
     private final Context context;
     private final AtomicReference<PortalState> stateRef;
     private final PortalGeometry geometry = new PortalGeometry();
+    private final AtomicInteger generation = new AtomicInteger();
     private final Listener listener;
     private final HandlerThread thread = new HandlerThread("Portal-MediaPipe");
     private Handler handler;
@@ -64,12 +66,16 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
     Executor executor() { return executor; }
 
     void setFrontCamera(boolean front) {
-        if (this.frontCamera != front) resetPortal();
+        boolean changed = this.frontCamera != front;
         this.frontCamera = front;
+        if (changed) resetPortal();
     }
 
     void resetPortal() {
-        stateRef.set(PortalState.none());
+        synchronized (stateRef) {
+            generation.incrementAndGet();
+            stateRef.set(PortalState.none());
+        }
         handler.post(geometry::reset);
     }
 
@@ -121,6 +127,8 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
         }
 
         long started = System.nanoTime();
+        int frameGeneration = generation.get();
+        boolean frameFront = frontCamera;
         MPImage mpImage = null;
         try {
             int width = imageProxy.getWidth();
@@ -129,7 +137,7 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
 
             // CameraX exposes the authoritative mapping from sensor coordinates to THIS
             // ImageAnalysis buffer. Invert it now so renderer can later map:
-            // analysis buffer -> camera sensor -> OverlayEffect buffer.
+            // analysis buffer -> camera sensor -> CameraEffect output buffer.
             Matrix sensorToAnalysis = imageProxy.getImageInfo().getSensorToBufferTransformMatrix();
             Matrix analysisToSensor = new Matrix();
             if (sensorToAnalysis == null || !sensorToAnalysis.invert(analysisToSensor)) {
@@ -158,17 +166,20 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
             HandLandmarkerResult result = landmarker.detectForVideo(mpImage, processing, timestampMs);
             PortalState portal = geometry.fromResult(
                     result,
-                    frontCamera,
+                    frameFront,
                     analysisToSensor,
                     width,
                     height,
-                    rotation);
-            stateRef.set(portal);
+                    rotation,
+                    started);
+            synchronized (stateRef) {
+                if (frameGeneration == generation.get()) stateRef.set(portal);
+            }
 
             double ms = (System.nanoTime() - started) / 1_000_000.0;
             updatePerf(ms, portal.hands);
         } catch (Throwable error) {
-            stateRef.set(PortalState.none());
+            // Preserve the last coherent panel on an isolated failed frame.
             listener.onTrackerError("Tracking frame gagal: " + error.getMessage());
         } finally {
             if (mpImage != null) mpImage.close();

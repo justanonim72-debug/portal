@@ -10,6 +10,7 @@ android {
         applicationId "dev.riszn.portal"
         minSdk 26
         targetSdk 35
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         versionCode 1
         versionName "0.1.0-native-gpu"
     }
@@ -34,6 +35,10 @@ android {
 }
 
 dependencies {
+    testImplementation "junit:junit:4.13.2"
+    androidTestImplementation "androidx.test:runner:1.6.2"
+    androidTestImplementation "androidx.test:rules:1.6.1"
+    androidTestImplementation "androidx.test.ext:junit:1.2.1"
     def camerax = "1.6.2"
     implementation "androidx.appcompat:appcompat:1.7.1"
     implementation "com.google.android.material:material:1.13.0"
@@ -42,6 +47,5 @@ dependencies {
     implementation "androidx.camera:camera-lifecycle:${camerax}"
     implementation "androidx.camera:camera-view:${camerax}"
     implementation "androidx.camera:camera-video:${camerax}"
-    implementation "androidx.camera:camera-effects:${camerax}"
     implementation "com.google.mediapipe:tasks-vision:0.10.35"
 }

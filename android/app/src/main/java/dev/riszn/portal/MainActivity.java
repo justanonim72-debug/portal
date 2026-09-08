@@ -7,8 +7,6 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.HandlerThread;
 import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.View;
@@ -21,11 +19,9 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.camera.core.CameraEffect;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.MirrorMode;
-import androidx.camera.effects.OverlayEffect;
 import androidx.camera.video.MediaStoreOutputOptions;
 import androidx.camera.video.Recording;
 import androidx.camera.video.VideoRecordEvent;
@@ -58,8 +54,7 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
     private LifecycleCameraController cameraController;
     private HandTracker handTracker;
     private PortalRenderer portalRenderer;
-    private HandlerThread overlayThread;
-    private OverlayEffect overlayEffect;
+    private PortalEffect portalEffect;
     private Recording activeRecording;
 
     private boolean frontCamera = true;
@@ -74,7 +69,7 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
         buildUi();
 
         portalRenderer = new PortalRenderer(portalState);
-        setupOverlayEffect();
+        setupCameraEffect();
 
         handTracker = new HandTracker(this, portalState, this);
         handTracker.setFrontCamera(frontCamera);
@@ -119,16 +114,23 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
         controls.setGravity(Gravity.CENTER);
         controls.setPadding(dp(10), dp(8), dp(10), dp(18));
 
-        effectButton = control("THERMAL HOLO", true);
+        effectButton = control("VIOLET", true);
         recordButton = control("●", false);
         debugButton = control("⌁", false);
         flipButton = control("↺", false);
+        TextView resetButton = control("×", false);
+        resetButton.setContentDescription("Reset portal");
+        resetButton.setOnClickListener(v -> handTracker.resetPortal());
+        recordButton.setContentDescription("Start or stop recording");
+        debugButton.setContentDescription("Toggle hand skeleton");
+        flipButton.setContentDescription("Switch camera");
 
         LinearLayout.LayoutParams effectLp = new LinearLayout.LayoutParams(0, dp(54), 1f);
         controls.addView(effectButton, effectLp);
         addSmallControl(controls, recordButton);
         addSmallControl(controls, debugButton);
         addSmallControl(controls, flipButton);
+        addSmallControl(controls, resetButton);
 
         FrameLayout.LayoutParams controlsLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
@@ -147,16 +149,12 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
         setContentView(root);
     }
 
-    private void setupOverlayEffect() {
-        overlayThread = new HandlerThread("Portal-Overlay-GL");
-        overlayThread.start();
-        Handler handler = new Handler(overlayThread.getLooper());
-        overlayEffect = new OverlayEffect(
-                CameraEffect.PREVIEW | CameraEffect.VIDEO_CAPTURE,
-                0,
-                handler,
-                throwable -> runOnUiThread(() -> setStatus("OVERLAY ERROR", 0xFFFF6B78)));
-        overlayEffect.setOnDrawListener(frame -> portalRenderer.draw(frame));
+    private void setupCameraEffect() {
+        portalEffect = new PortalEffect(portalRenderer,
+                error -> runOnUiThread(() -> {
+                    setStatus("FILTER ERROR", 0xFFFF6B78);
+                    perfText.setText(error.getMessage());
+                }));
     }
 
     private void setupCamera() {
@@ -170,13 +168,14 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
         cameraController.setImageAnalysisBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST);
         cameraController.setImageAnalysisOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888);
         cameraController.setImageAnalysisAnalyzer(handTracker.executor(), handTracker);
-        cameraController.setEffects(Collections.singleton(overlayEffect));
+        cameraController.setEffects(Collections.singleton(portalEffect.cameraEffect()));
         cameraController.bindToLifecycle(this);
         previewView.setController(cameraController);
     }
 
     private void switchCamera() {
         if (cameraController == null) return;
+        if (activeRecording != null) { toast("Hentikan rekaman sebelum ganti kamera"); return; }
         frontCamera = !frontCamera;
         handTracker.setFrontCamera(frontCamera);
         handTracker.resetPortal();
@@ -261,10 +260,10 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
         runOnUiThread(() -> {
             PortalState s = portalState.get();
             int rawHands = s == null ? hands : s.hands;
-            perfText.setText(String.format(Locale.US, "%.1f ms · %.0f track/s · %d tangan", inferenceMs, detectorFps, rawHands));
+            perfText.setText(String.format(Locale.US, "%.0f ms infer · %.0f ms respons\n%.0f track/s · %d tangan", inferenceMs, portalRenderer.responseMs(), detectorFps, rawHands));
             if (activeRecording != null) return;
 
-            boolean portalActive = s != null && s.mode != PortalState.Mode.NONE;
+            boolean portalActive = s != null && s.visible();
             String mode;
             int color;
             if (portalActive) {
@@ -272,7 +271,9 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
                     mode = "PORTAL AKTIF · TUNJUKKAN TANGAN";
                     color = 0xFFFFC966;
                 } else {
-                    mode = "PORTAL AKTIF · SENTUH TEPI + TARIK";
+                    mode = s.phase == PortalInteraction.Phase.SEEDED ? "LEPAS PINCH UNTUK TARIK" :
+                            (s.phase == PortalInteraction.Phase.GRABBING || s.phase == PortalInteraction.Phase.RESIZING) ?
+                            "TARIK · TEKUK JARI UNTUK LEPAS" : "SENTUH TEPI + TARIK · × RESET";
                     color = 0xFF61F3C2;
                 }
             } else if (rawHands > 0) {
@@ -315,10 +316,12 @@ public final class MainActivity extends AppCompatActivity implements HandTracker
             activeRecording.stop();
             activeRecording = null;
         }
-        if (cameraController != null) cameraController.clearImageAnalysisAnalyzer();
+        if (cameraController != null) {
+            cameraController.clearImageAnalysisAnalyzer();
+            cameraController.unbind();
+        }
         if (handTracker != null) handTracker.close();
-        if (overlayEffect != null) overlayEffect.close();
-        if (overlayThread != null) overlayThread.quitSafely();
+        if (portalEffect != null) portalEffect.close();
         super.onDestroy();
     }
 
