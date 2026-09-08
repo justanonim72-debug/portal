@@ -63,8 +63,14 @@ final class HandTracks {
         }
         // Retain a missing hand's identity, but reset its filters on return so the filter's
         // catch-up motion cannot leak unseen travel into a resumed grab.
-        for (Track t : tracks) t.missed = !observed.contains(t);
-        for (Track t : observed) if (!tracks.contains(t) && tracks.size() < 2) tracks.add(t);
+        List<Track> retained = new ArrayList<>(observed);
+        for (Track t : tracks) {
+            t.missed = !observed.contains(t);
+            if (t.missed && retained.size() < 2) retained.add(t);
+        }
+        // Observed identities take priority over missing ones. Otherwise a new hand could
+        // receive a fresh, unretained ID every frame while both missing slots were occupied.
+        tracks.clear(); tracks.addAll(retained);
         return result;
     }
 

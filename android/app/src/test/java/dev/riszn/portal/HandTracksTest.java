@@ -32,6 +32,19 @@ public class HandTracksTest {
         assertNotEquals(id,tracks.update(List.of(a),2_000_000_000L).get(0).id);
         tracks.reset();assertNotEquals(id,tracks.update(List.of(a),3_000_000_000L).get(0).id);
     }
+    @Test public void newHandKeepsIdentityWhenMissingSlotsAreOccupied() {
+        HandTracks tracks=new HandTracks();
+        var old=tracks.update(List.of(observation(0,"Left"),observation(250,"Right")),1_000_000_000L);
+        tracks.update(List.of(),1_040_000_000L);
+        var newHand=observation(1000,"Right");
+        int id=tracks.update(List.of(newHand),1_080_000_000L).get(0).id;
+        assertNotEquals(old.get(0).id,id);assertNotEquals(old.get(1).id,id);
+        var next=tracks.update(List.of(newHand,observation(0,"Left")),1_120_000_000L);
+        assertEquals(id,next.get(0).id);
+        assertEquals(old.get(0).id,next.get(1).id);
+        var reordered=tracks.update(List.of(observation(0,"Left"),newHand),1_160_000_000L);
+        assertEquals(id,reordered.get(1).id);
+    }
     @Test public void oneEuroFilterIsRotationInvariantAndResponsive() {
         HandTracks.Euro a=new HandTracks.Euro(4,.035f),b=new HandTracks.Euro(4,.035f);
         float[] av=new float[2],bv=new float[2];

@@ -9,11 +9,11 @@ CameraX camera + MediaPipe Hand Landmarker (GPU preferred, CPU fallback) with a 
 
 Use [Build Portal Android APK](../.github/workflows/build-portal-android.yml) for a tested installable APK. It runs JVM tests, lint, Android emulator shader/recording checks, signature verification and APK alignment checks. The official MediaPipe model is fetched during CI.
 
-For local builds use Java 17, Gradle 8.11.1, Android platform 36, and place the [official model](https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task) at `app/src/main/assets/hand_landmarker.task`:
+For local builds use Java 17, Gradle 8.11.1, Android platform 36, and place the [official model](https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task) at `android/app/src/main/assets/hand_landmarker.task`. For instrumentation, also place the [official hand fixture](https://storage.googleapis.com/mediapipe-assets/right_hands.jpg) at `android/app/src/androidTest/assets/right_hands.jpg` and connect an Android device or camera-enabled emulator. From the repository root:
 
 ```sh
-gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
-gradle :app:connectedDebugAndroidTest
+gradle -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+sh tools/verify-android.sh
 ```
 
 See [interaction architecture and verification](docs/interaction.md) for root causes, the exact state machine, coordinate/identity/filter contracts, performance measurements and remaining physical-device validation.

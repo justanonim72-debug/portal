@@ -3,11 +3,13 @@ name: Build Portal Android APK
 on:
   workflow_dispatch:
   pull_request:
-    paths: ["android/**", ".github/workflows/build-portal-android.yml"]
+    paths: ["android/**", "tools/test-core.py", "tools/verify-android.sh", ".github/workflows/build-portal-android.yml"]
   push:
     branches: [main, "codex/**"]
     paths:
       - "android/**"
+      - "tools/test-core.py"
+      - "tools/verify-android.sh"
       - ".github/workflows/build-portal-android.yml"
 
 permissions:

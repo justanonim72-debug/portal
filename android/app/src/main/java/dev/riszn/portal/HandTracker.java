@@ -72,8 +72,10 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
     }
 
     void resetPortal() {
-        generation.incrementAndGet();
-        stateRef.set(PortalState.none());
+        synchronized (stateRef) {
+            generation.incrementAndGet();
+            stateRef.set(PortalState.none());
+        }
         handler.post(geometry::reset);
     }
 
@@ -135,7 +137,7 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
 
             // CameraX exposes the authoritative mapping from sensor coordinates to THIS
             // ImageAnalysis buffer. Invert it now so renderer can later map:
-            // analysis buffer -> camera sensor -> OverlayEffect buffer.
+            // analysis buffer -> camera sensor -> CameraEffect output buffer.
             Matrix sensorToAnalysis = imageProxy.getImageInfo().getSensorToBufferTransformMatrix();
             Matrix analysisToSensor = new Matrix();
             if (sensorToAnalysis == null || !sensorToAnalysis.invert(analysisToSensor)) {
@@ -170,7 +172,9 @@ final class HandTracker implements ImageAnalysis.Analyzer, AutoCloseable {
                     height,
                     rotation,
                     started);
-            if (frameGeneration == generation.get()) stateRef.set(portal);
+            synchronized (stateRef) {
+                if (frameGeneration == generation.get()) stateRef.set(portal);
+            }
 
             double ms = (System.nanoTime() - started) / 1_000_000.0;
             updatePerf(ms, portal.hands);

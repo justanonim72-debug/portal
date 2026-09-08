@@ -42,6 +42,7 @@ public class PortalRecordingTest {
             scenario.moveToState(Lifecycle.State.CREATED);
             scenario.moveToState(Lifecycle.State.RESUMED);
             awaitPreview(scenario);
+            recordAndVerify(scenario,"front-resumed",true);
             scenario.onActivity(activity -> ((TextView)field(activity,"flipButton")).performClick());
             awaitPreview(scenario);
             recordAndVerify(scenario,"back",true);
