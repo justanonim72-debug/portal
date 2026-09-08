@@ -131,9 +131,11 @@ public class PortalInteractionTest {
         float[] p=activate(),q=panel.corners(); tip(p,16,q[0],q[1]); settle(p);
         tip(p,16,q[4]+50,q[5]+50); settle(p);
         assertTrue(java.util.Arrays.toString(panel.corners()),PortalInteraction.valid(panel.corners(),.01f,.01f));
-        tip(p,16,q[0]-50,q[1]+50); settle(p);
+        float fromX=p[32],fromY=p[33];
+        for(int i=1;i<=20;i++){tip(p,16,fromX+(q[0]-50-fromX)*i/20,fromY+(q[1]+50-fromY)*i/20);tick(p);}
+        settle(p);
         assertTrue(java.util.Arrays.toString(panel.corners()),PortalInteraction.valid(panel.corners(),.01f,.01f));
-        assertTrue(Math.hypot(panel.corners()[0]-q[0],panel.corners()[1]-q[1])>10);
+        assertTrue("q="+java.util.Arrays.toString(q)+" now="+java.util.Arrays.toString(panel.corners())+" grips="+panel.grips().size(),Math.hypot(panel.corners()[0]-q[0],panel.corners()[1]-q[1])>10);
     }
     @Test public void horizontalAndVerticalHandsAreRotationEquivalentInPortraitPixels() {
         float[] p=hand(0); tip(p,8,310,300); p[8]=312;p[9]=300;
